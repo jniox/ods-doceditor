@@ -1,3 +1,5 @@
+/target
 /bin
 .env
 *.swp
+*.swo
