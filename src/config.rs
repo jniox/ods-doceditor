@@ -8,6 +8,12 @@ pub struct AppConfig {
     pub redpanda_brokers: Option<String>,
     pub redpanda_topic: String,
     pub max_document_size_mb: usize,
+    // JWT config
+    pub jwt_rsa_public_key_b64: Option<String>,
+    pub jwt_allow_hs256: bool,
+    pub jwt_secret: Option<String>,
+    pub jwt_issuer: Option<String>,
+    pub jwt_audience: Option<String>,
 }
 
 impl AppConfig {
@@ -27,6 +33,13 @@ impl AppConfig {
                 .unwrap_or_else(|_| "10".to_string())
                 .parse()
                 .unwrap_or(10),
+            jwt_rsa_public_key_b64: std::env::var("JWT_RSA_PUBLIC_KEY_B64").ok(),
+            jwt_allow_hs256: std::env::var("JWT_ALLOW_HS256")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            jwt_secret: std::env::var("JWT_SECRET").ok(),
+            jwt_issuer: std::env::var("JWT_ISSUER").ok(),
+            jwt_audience: std::env::var("JWT_AUDIENCE").ok(),
         }
     }
 }

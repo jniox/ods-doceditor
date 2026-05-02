@@ -1,4 +1,5 @@
 use actix_web::{test, web, App};
+use ods_doceditor::api::extractors::test_helpers::{generate_test_token, generate_expired_token, test_jwt_config};
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
@@ -70,22 +71,24 @@ async fn test_create_document() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
+
+    let tenant_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let token = generate_test_token(user_id, tenant_id);
 
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents", web::post().to(documents::create_document)),
     )
     .await;
 
-    let tenant_id = Uuid::new_v4();
-    let user_id = Uuid::new_v4();
-
     let req = test::TestRequest::post()
         .uri("/api/v1/documents")
-        .insert_header(("X-Tenant-Id", tenant_id.to_string()))
-        .insert_header(("X-User-Id", user_id.to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "title": "My First Document"
         }))
@@ -113,19 +116,24 @@ async fn test_create_document_empty_title_rejected() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
+
+    let tenant_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let token = generate_test_token(user_id, tenant_id);
 
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents", web::post().to(documents::create_document)),
     )
     .await;
 
     let req = test::TestRequest::post()
         .uri("/api/v1/documents")
-        .insert_header(("X-Tenant-Id", Uuid::new_v4().to_string()))
-        .insert_header(("X-User-Id", Uuid::new_v4().to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "title": "   "
         }))
@@ -141,6 +149,7 @@ async fn test_list_documents_tenant_isolation() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
 
     let tenant_a = Uuid::new_v4();
     let tenant_b = Uuid::new_v4();
@@ -160,15 +169,16 @@ async fn test_list_documents_tenant_isolation() {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents", web::get().to(documents::list_documents)),
     )
     .await;
 
     // List as tenant A: should only see Doc A
+    let token_a = generate_test_token(user_id, tenant_a);
     let req = test::TestRequest::get()
         .uri("/api/v1/documents")
-        .insert_header(("X-Tenant-Id", tenant_a.to_string()))
-        .insert_header(("X-User-Id", user_id.to_string()))
+        .insert_header(("Authorization", format!("Bearer {token_a}")))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
@@ -186,9 +196,11 @@ async fn test_update_document_status_draft_to_published() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
 
     let tenant_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
+    let token = generate_test_token(user_id, tenant_id);
 
     let doc = svc
         .create_document(tenant_id, "To Publish", user_id, serde_json::json!({}))
@@ -199,14 +211,14 @@ async fn test_update_document_status_draft_to_published() {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents/{id}", web::patch().to(documents::update_document)),
     )
     .await;
 
     let req = test::TestRequest::patch()
         .uri(&format!("/api/v1/documents/{}", doc.id))
-        .insert_header(("X-Tenant-Id", tenant_id.to_string()))
-        .insert_header(("X-User-Id", user_id.to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "status": "published" }))
         .to_request();
 
@@ -231,9 +243,11 @@ async fn test_update_document_invalid_status_transition() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
 
     let tenant_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
+    let token = generate_test_token(user_id, tenant_id);
 
     // Create and publish
     let doc = svc
@@ -248,6 +262,7 @@ async fn test_update_document_invalid_status_transition() {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents/{id}", web::patch().to(documents::update_document)),
     )
     .await;
@@ -255,8 +270,7 @@ async fn test_update_document_invalid_status_transition() {
     // Try to go back to draft (should fail)
     let req = test::TestRequest::patch()
         .uri(&format!("/api/v1/documents/{}", doc.id))
-        .insert_header(("X-Tenant-Id", tenant_id.to_string()))
-        .insert_header(("X-User-Id", user_id.to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "status": "draft" }))
         .to_request();
 
@@ -270,9 +284,11 @@ async fn test_delete_document_soft_delete() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
 
     let tenant_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
+    let token = generate_test_token(user_id, tenant_id);
 
     let doc = svc
         .create_document(tenant_id, "To Delete", user_id, serde_json::json!({}))
@@ -283,6 +299,7 @@ async fn test_delete_document_soft_delete() {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc.clone()))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents/{id}", web::delete().to(documents::delete_document))
             .route("/api/v1/documents", web::get().to(documents::list_documents)),
     )
@@ -291,8 +308,7 @@ async fn test_delete_document_soft_delete() {
     // Delete
     let req = test::TestRequest::delete()
         .uri(&format!("/api/v1/documents/{}", doc.id))
-        .insert_header(("X-Tenant-Id", tenant_id.to_string()))
-        .insert_header(("X-User-Id", user_id.to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
@@ -301,8 +317,7 @@ async fn test_delete_document_soft_delete() {
     // Verify not in list anymore
     let req = test::TestRequest::get()
         .uri("/api/v1/documents")
-        .insert_header(("X-Tenant-Id", tenant_id.to_string()))
-        .insert_header(("X-User-Id", user_id.to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
@@ -324,9 +339,11 @@ async fn test_create_and_list_versions() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
 
     let tenant_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
+    let token = generate_test_token(user_id, tenant_id);
 
     let doc = svc
         .create_document(tenant_id, "Versioned Doc", user_id, serde_json::json!({}))
@@ -337,6 +354,7 @@ async fn test_create_and_list_versions() {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents/{id}/versions", web::post().to(versions::create_version))
             .route("/api/v1/documents/{id}/versions", web::get().to(versions::list_versions)),
     )
@@ -345,8 +363,7 @@ async fn test_create_and_list_versions() {
     // Create a version
     let req = test::TestRequest::post()
         .uri(&format!("/api/v1/documents/{}/versions", doc.id))
-        .insert_header(("X-Tenant-Id", tenant_id.to_string()))
-        .insert_header(("X-User-Id", user_id.to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({ "comment": "First save" }))
         .to_request();
 
@@ -360,8 +377,7 @@ async fn test_create_and_list_versions() {
     // List versions
     let req = test::TestRequest::get()
         .uri(&format!("/api/v1/documents/{}/versions", doc.id))
-        .insert_header(("X-Tenant-Id", tenant_id.to_string()))
-        .insert_header(("X-User-Id", user_id.to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
@@ -372,17 +388,19 @@ async fn test_create_and_list_versions() {
     assert_eq!(versions.len(), 1);
 }
 
-/// Test: unauthenticated request returns 401.
+/// Test: unauthenticated request returns 401 (no Authorization header).
 #[actix_web::test]
 async fn test_unauthenticated_request() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
 
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents", web::get().to(documents::list_documents)),
     )
     .await;
@@ -396,25 +414,86 @@ async fn test_unauthenticated_request() {
     assert_eq!(resp.status(), 401);
 }
 
+/// Test: expired token returns 401.
+#[actix_web::test]
+async fn test_expired_token_rejected() {
+    let pool = setup_test_pool().await;
+    let producer = Arc::new(InMemoryProducer::new());
+    let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
+
+    let tenant_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let token = generate_expired_token(user_id, tenant_id);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
+            .route("/api/v1/documents", web::get().to(documents::list_documents)),
+    )
+    .await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/documents")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+}
+
+/// Test: invalid token (garbage) returns 401.
+#[actix_web::test]
+async fn test_invalid_token_rejected() {
+    let pool = setup_test_pool().await;
+    let producer = Arc::new(InMemoryProducer::new());
+    let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
+            .route("/api/v1/documents", web::get().to(documents::list_documents)),
+    )
+    .await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/documents")
+        .insert_header(("Authorization", "Bearer totally.invalid.token"))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+}
+
 /// BR-029: Invalid metadata key rejected.
 #[actix_web::test]
 async fn test_invalid_metadata_key_rejected() {
     let pool = setup_test_pool().await;
     let producer = Arc::new(InMemoryProducer::new());
     let svc = DocumentService::new(pool.clone(), producer.clone());
+    let jwt_cfg = test_jwt_config();
+
+    let tenant_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let token = generate_test_token(user_id, tenant_id);
 
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
+            .app_data(web::Data::new(jwt_cfg))
             .route("/api/v1/documents", web::post().to(documents::create_document)),
     )
     .await;
 
     let req = test::TestRequest::post()
         .uri("/api/v1/documents")
-        .insert_header(("X-Tenant-Id", Uuid::new_v4().to_string()))
-        .insert_header(("X-User-Id", Uuid::new_v4().to_string()))
+        .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(serde_json::json!({
             "title": "Test",
             "metadata": { "InvalidKey": "value" }

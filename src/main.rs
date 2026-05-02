@@ -3,6 +3,7 @@ use std::sync::Arc;
 use actix_web::{App, HttpServer, web};
 use sqlx::postgres::PgPoolOptions;
 
+use ods_doceditor::api::extractors::JwtConfig;
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::config::AppConfig;
 use ods_doceditor::events::producer::NoopProducer;
@@ -20,6 +21,10 @@ async fn main() -> std::io::Result<()> {
 
     // Config
     let config = AppConfig::from_env();
+
+    // JWT configuration
+    let jwt_config = build_jwt_config(&config);
+    tracing::info!("JWT authentication configured");
 
     // PostgreSQL connection pool
     let pool = PgPoolOptions::new()
@@ -52,6 +57,9 @@ async fn main() -> std::io::Result<()> {
     // Document service
     let doc_service = DocumentService::new(pool.clone(), producer);
 
+    // Payload limits based on max_document_size_mb
+    let max_payload_bytes = config.max_document_size_mb * 1024 * 1024;
+
     let bind = format!("{}:{}", config.server_host, config.server_port);
     tracing::info!("Starting DocEditor on {}", bind);
 
@@ -59,6 +67,10 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(doc_service.clone()))
+            .app_data(web::Data::new(jwt_config.clone()))
+            // Wire max document size to JSON and payload config
+            .app_data(web::JsonConfig::default().limit(max_payload_bytes))
+            .app_data(web::PayloadConfig::default().limit(max_payload_bytes))
             // Health endpoints (no auth)
             .route("/health", web::get().to(health::health))
             .route("/ready", web::get().to(health::ready))
@@ -79,4 +91,26 @@ async fn main() -> std::io::Result<()> {
     .bind(&bind)?
     .run()
     .await
+}
+
+fn build_jwt_config(config: &AppConfig) -> JwtConfig {
+    let issuer = config.jwt_issuer.as_deref();
+    let audience = config.jwt_audience.as_deref();
+
+    // Prefer RS256 with RSA public key
+    if let Some(ref pem_b64) = config.jwt_rsa_public_key_b64 {
+        return JwtConfig::from_rsa_pem_b64(pem_b64, issuer, audience)
+            .expect("Invalid JWT_RSA_PUBLIC_KEY_B64");
+    }
+
+    // Fall back to HS256 for dev/test if explicitly allowed
+    if config.jwt_allow_hs256 {
+        let secret = config
+            .jwt_secret
+            .as_deref()
+            .expect("JWT_SECRET must be set when JWT_ALLOW_HS256=true");
+        return JwtConfig::from_hs256_secret(secret, issuer, audience);
+    }
+
+    panic!("JWT not configured: set JWT_RSA_PUBLIC_KEY_B64 (production) or JWT_ALLOW_HS256=true + JWT_SECRET (dev)");
 }
