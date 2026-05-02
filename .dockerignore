@@ -1,0 +1,7 @@
+/target
+/bin
+.env
+.git
+tests/
+*.md
+.claude/
