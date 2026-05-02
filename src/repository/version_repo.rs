@@ -16,11 +16,12 @@ pub async fn create_version(
 ) -> AppResult<DocumentVersion> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // Get the document's current version and yjs_state
+    // Get the document's current version and yjs_state (defense-in-depth: filter by tenant_id)
     let row = sqlx::query(
-        "SELECT current_version, yjs_state FROM editor.documents WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT current_version, yjs_state FROM editor.documents WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL",
     )
     .bind(document_id)
+    .bind(tenant_id)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
@@ -50,10 +51,11 @@ pub async fn create_version(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Update document's current_version
-    sqlx::query("UPDATE editor.documents SET current_version = $1, updated_at = now() WHERE id = $2")
+    // Update document's current_version (defense-in-depth: filter by tenant_id)
+    sqlx::query("UPDATE editor.documents SET current_version = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3")
         .bind(new_version)
         .bind(document_id)
+        .bind(tenant_id)
         .execute(&mut *tx)
         .await?;
 
@@ -69,11 +71,12 @@ pub async fn list_versions(
 ) -> AppResult<Vec<DocumentVersion>> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // Verify document exists
+    // Verify document exists (defense-in-depth: filter by tenant_id)
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM editor.documents WHERE id = $1 AND deleted_at IS NULL)",
+        "SELECT EXISTS(SELECT 1 FROM editor.documents WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL)",
     )
     .bind(document_id)
+    .bind(tenant_id)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -85,10 +88,11 @@ pub async fn list_versions(
         r#"SELECT id, document_id, tenant_id, version, yjs_snapshot, created_by,
                   created_at, comment, snapshot_size_bytes, is_auto
          FROM editor.document_versions
-         WHERE document_id = $1
+         WHERE document_id = $1 AND tenant_id = $2
          ORDER BY version DESC"#,
     )
     .bind(document_id)
+    .bind(tenant_id)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -109,9 +113,10 @@ pub async fn get_version(
         r#"SELECT id, document_id, tenant_id, version, yjs_snapshot, created_by,
                   created_at, comment, snapshot_size_bytes, is_auto
          FROM editor.document_versions
-         WHERE document_id = $1 AND version = $2"#,
+         WHERE document_id = $1 AND tenant_id = $2 AND version = $3"#,
     )
     .bind(document_id)
+    .bind(tenant_id)
     .bind(version_number)
     .fetch_optional(&mut *tx)
     .await?;

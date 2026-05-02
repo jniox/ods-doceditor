@@ -48,8 +48,8 @@ pub async fn list_documents(
     let base_count = "SELECT COUNT(*)::bigint FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL";
     let base_rows = "SELECT id, tenant_id, title, status, created_by, created_at, updated_at, deleted_at, current_version, word_count, metadata FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL";
 
-    // Build dynamic query for count (no ORDER BY needed)
-    let (count_sql, count_args) = build_list_query(base_count, status_filter, search, None, None, false);
+    // Build dynamic query for count (no ORDER BY, no LIMIT/OFFSET)
+    let (count_sql, count_args) = build_list_query(base_count, status_filter, search, false);
 
     let total: (i64,) = {
         let mut q = sqlx::query_as(&count_sql);
@@ -60,8 +60,14 @@ pub async fn list_documents(
         q.fetch_one(&mut *tx).await?
     };
 
-    // Build dynamic query for rows (with ORDER BY)
-    let (rows_sql, rows_args) = build_list_query(base_rows, status_filter, search, Some(per_page), Some(offset), true);
+    // Build dynamic query for rows (with ORDER BY + LIMIT/OFFSET via bind)
+    let (rows_sql, rows_args) = build_list_query(base_rows, status_filter, search, true);
+
+    // Append LIMIT/OFFSET with parameterized binds
+    let param_idx_after_args = 2 + rows_args.len(); // $1=tenant_id, then dynamic args
+    let limit_param = format!("${}", param_idx_after_args);
+    let offset_param = format!("${}", param_idx_after_args + 1);
+    let rows_sql = format!("{rows_sql} LIMIT {limit_param} OFFSET {offset_param}");
 
     let docs: Vec<Document> = {
         let mut q = sqlx::query_as(&rows_sql);
@@ -69,6 +75,8 @@ pub async fn list_documents(
         for arg in &rows_args {
             q = q.bind(arg.as_str());
         }
+        q = q.bind(per_page);
+        q = q.bind(offset);
         q.fetch_all(&mut *tx).await?
     };
 
@@ -80,8 +88,6 @@ fn build_list_query(
     base: &str,
     status_filter: Option<&str>,
     search: Option<&str>,
-    limit: Option<i64>,
-    offset: Option<i64>,
     add_order: bool,
 ) -> (String, Vec<String>) {
     let mut sql = base.to_string();
@@ -100,23 +106,19 @@ fn build_list_query(
             " AND to_tsvector('english', title) @@ plainto_tsquery('english', ${param_idx})"
         ));
         args.push(q.to_string());
+        // param_idx += 1; // not needed further but included for correctness
+        let _ = param_idx; // suppress unused warning
     }
 
     if add_order {
         sql.push_str(" ORDER BY updated_at DESC");
     }
 
-    if let Some(l) = limit {
-        sql.push_str(&format!(" LIMIT {l}"));
-    }
-    if let Some(o) = offset {
-        sql.push_str(&format!(" OFFSET {o}"));
-    }
-
     (sql, args)
 }
 
 /// Get a single document by ID (within tenant context).
+/// Defense-in-depth: filters by both id AND tenant_id.
 pub async fn get_document(
     pool: &PgPool,
     tenant_id: Uuid,
@@ -128,9 +130,10 @@ pub async fn get_document(
         r#"SELECT id, tenant_id, title, status, created_by, created_at, updated_at,
                   deleted_at, current_version, word_count, metadata
          FROM editor.documents
-         WHERE id = $1 AND deleted_at IS NULL"#,
+         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL"#,
     )
     .bind(document_id)
+    .bind(tenant_id)
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -139,6 +142,7 @@ pub async fn get_document(
 }
 
 /// Update document metadata (title, status, metadata fields).
+/// Defense-in-depth: filters by both id AND tenant_id.
 pub async fn update_document(
     pool: &PgPool,
     tenant_id: Uuid,
@@ -154,9 +158,10 @@ pub async fn update_document(
         r#"SELECT id, tenant_id, title, status, created_by, created_at, updated_at,
                   deleted_at, current_version, word_count, metadata
          FROM editor.documents
-         WHERE id = $1 AND deleted_at IS NULL"#,
+         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL"#,
     )
     .bind(document_id)
+    .bind(tenant_id)
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -185,7 +190,7 @@ pub async fn update_document(
     let doc: Document = sqlx::query_as(
         r#"UPDATE editor.documents
          SET title = $1, status = $2, metadata = $3, updated_at = now()
-         WHERE id = $4 AND deleted_at IS NULL
+         WHERE id = $4 AND tenant_id = $5 AND deleted_at IS NULL
          RETURNING id, tenant_id, title, status, created_by, created_at, updated_at,
                    deleted_at, current_version, word_count, metadata"#,
     )
@@ -193,6 +198,7 @@ pub async fn update_document(
     .bind(final_status)
     .bind(&final_metadata)
     .bind(document_id)
+    .bind(tenant_id)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -201,6 +207,7 @@ pub async fn update_document(
 }
 
 /// Soft-delete a document.
+/// Defense-in-depth: filters by both id AND tenant_id.
 pub async fn delete_document(
     pool: &PgPool,
     tenant_id: Uuid,
@@ -211,9 +218,10 @@ pub async fn delete_document(
     let result = sqlx::query(
         r#"UPDATE editor.documents
          SET deleted_at = now(), status = 'archived'
-         WHERE id = $1 AND deleted_at IS NULL"#,
+         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL"#,
     )
     .bind(document_id)
+    .bind(tenant_id)
     .execute(&mut *tx)
     .await?;
 

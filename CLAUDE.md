@@ -29,9 +29,10 @@ ods-platform
 - `GET /api/v1/documents/{id}/versions/{version}` — get specific version
 
 ## Multi-Tenancy
-- Auth via X-Tenant-Id + X-User-Id headers (AuthUser extractor)
+- Auth via JWT Bearer token (RS256 production, HS256 dev/test)
+- AuthUser extractor validates JWT and extracts tenant_id + user_id from claims
 - All DB queries use `begin_tenant_tx` which sets `app.tenant_id` for RLS
-- List queries also include explicit `tenant_id = $1` filter (defense-in-depth)
+- All queries include explicit `tenant_id` filter (defense-in-depth)
 - RLS policies on all tables enforce tenant isolation
 - All events include tenant_id
 
@@ -51,13 +52,19 @@ This is required because the dev DB is shared across services.
 
 ## Tests
 ```bash
-DATABASE_URL="postgres://ods:ods-dev-2026@127.0.0.1:5433/ods" cargo test
+DATABASE_URL="postgres://ods:ods-dev-2026@127.0.0.1:5433/ods" JWT_ALLOW_HS256=true JWT_SECRET=test-secret-for-doceditor-jwt-validation-only cargo test
 cargo clippy -- -D warnings
 cargo fmt --check
 ```
 
 ## Environment Variables
 - `DATABASE_URL` (required)
-- `PORT` (default: 8087)
-- `KAFKA_BROKERS` (default: localhost:9092)
-- `KAFKA_TOPIC` (default: events.editor)
+- `SERVER_PORT` (default: 8087)
+- `REDPANDA_BROKERS` (default: localhost:9092)
+- `REDPANDA_TOPIC` (default: editor.events)
+- `MAX_DOCUMENT_SIZE_MB` (default: 10)
+- `JWT_RSA_PUBLIC_KEY_B64` (base64-encoded RSA PEM, production)
+- `JWT_ALLOW_HS256` (true/false, dev only)
+- `JWT_SECRET` (required when JWT_ALLOW_HS256=true)
+- `JWT_ISSUER` (optional)
+- `JWT_AUDIENCE` (optional)
