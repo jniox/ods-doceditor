@@ -10,10 +10,15 @@ use uuid::Uuid;
 
 /// Helper to create a test app with a real database connection.
 async fn setup_test_pool() -> sqlx::PgPool {
-    let database_url =
-        std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://ods:ods-dev-2026@127.0.0.1:5433/ods".to_string()
-        });
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        // search_path pinned at connection startup so `_sqlx_migrations` lands in `editor`
+        // and never in the `public` table shared with the other services of this dev DB.
+        let dsn = "postgres://ods:ods-dev-2026@127.0.0.1:5435/ods\
+                   ?options=-c%20search_path%3Deditor%2Cpublic"
+            .to_string();
+        eprintln!("DATABASE_URL absent — repli sur le DSN de dev canonique {dsn}");
+        dsn
+    });
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
