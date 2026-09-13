@@ -1,7 +1,7 @@
-use actix_web::{FromRequest, HttpRequest, dev::Payload, web};
-use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation, decode};
+use actix_web::{dev::Payload, web, FromRequest, HttpRequest};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, TokenData, Validation};
 use serde::{Deserialize, Serialize};
-use std::future::{Ready, ready};
+use std::future::{ready, Ready};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -30,7 +30,11 @@ pub struct JwtConfig {
 
 impl JwtConfig {
     /// Create from base64-encoded RSA public key PEM.
-    pub fn from_rsa_pem_b64(pem_b64: &str, issuer: Option<&str>, audience: Option<&str>) -> Result<Self, String> {
+    pub fn from_rsa_pem_b64(
+        pem_b64: &str,
+        issuer: Option<&str>,
+        audience: Option<&str>,
+    ) -> Result<Self, String> {
         let pem_bytes = base64_decode(pem_b64)
             .map_err(|e| format!("Failed to decode base64 public key: {e}"))?;
 
@@ -45,7 +49,10 @@ impl JwtConfig {
             validation.set_audience(&[aud]);
         }
 
-        Ok(Self { decoding_key, validation })
+        Ok(Self {
+            decoding_key,
+            validation,
+        })
     }
 
     /// Create for HS256 (dev/test only).
@@ -58,11 +65,17 @@ impl JwtConfig {
         if let Some(aud) = audience {
             validation.set_audience(&[aud]);
         }
-        Self { decoding_key, validation }
+        Self {
+            decoding_key,
+            validation,
+        }
     }
 
     /// Decode and validate a JWT token.
-    pub fn decode_token(&self, token: &str) -> Result<TokenData<Claims>, jsonwebtoken::errors::Error> {
+    pub fn decode_token(
+        &self,
+        token: &str,
+    ) -> Result<TokenData<Claims>, jsonwebtoken::errors::Error> {
         decode::<Claims>(token, &self.decoding_key, &self.validation)
     }
 }
@@ -151,7 +164,7 @@ fn extract_bearer_token(req: &HttpRequest) -> Option<&str> {
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers {
     use super::*;
-    use jsonwebtoken::{EncodingKey, Header, encode};
+    use jsonwebtoken::{encode, EncodingKey, Header};
 
     const TEST_SECRET: &str = "test-secret-for-doceditor-jwt-validation-only";
 

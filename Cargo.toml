@@ -4,9 +4,24 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-actix-web = "4"
-actix-rt = "2"
-actix-cors = "0.7"
+# `http2` is deliberately absent: it is the only thing that pulls h2 0.3 into
+# this binary (RUSTSEC-2026-0258, no fix on the 0.3 line). See HR-20260909-001
+# and docstore's docs/security/h2-0.3-removal-runbook.md. The set below is
+# actix-web 4's default set minus that one feature, spelled out on purpose so a
+# broken build is never "fixed" by quietly dropping one more capability.
+# Do not add the TLS features here (rustls-0_*, openssl): each of them requires
+# http2 in its own list, which would bring the vulnerable parser back without
+# any line mentioning HTTP/2. TLS is terminated upstream (GCP LB + IAP).
+actix-web = { version = "4", default-features = false, features = [
+    "macros",
+    "compress-brotli",
+    "compress-gzip",
+    "compress-zstd",
+    "cookies",
+    "unicode",
+    "compat",
+    "ws",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
@@ -18,10 +33,7 @@ base64 = "0.22"
 dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-actix-web = "0.7"
 thiserror = "2"
-anyhow = "1"
-validator = { version = "0.19", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 regex-lite = "0.1"
 
@@ -31,7 +43,15 @@ test-helpers = []
 
 [dev-dependencies]
 ods-doceditor = { path = ".", features = ["test-helpers"] }
-actix-web = { version = "4", features = ["macros"] }
+# `reqwest` is kept deliberately even though only the guards reference it: it is
+# the sole remaining path by which `h2` appears in Cargo.lock, and the guards in
+# tests/framework.rs are written around that fact (HR-20260909-001). Removing it
+# would silently change what those guards are guarding.
+# Same reason as the entry in [dependencies], and it is not redundant: this
+# repository declares actix-web twice, and a dev-dependency taking the default
+# set is enough to keep h2 0.3 in Cargo.lock -- which is the file cargo audit
+# reads. `default-features = false` here removes nothing from the test build:
+# cargo unions the features of both edges, so the tests still get the full set
+# selected above, minus http2.
+actix-web = { version = "4", default-features = false, features = ["macros"] }
 reqwest = { version = "0.12", features = ["json"] }
-claim = "0.5"
-fake = { version = "3", features = ["derive", "uuid", "chrono"] }
