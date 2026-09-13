@@ -1,11 +1,11 @@
 ---
 name: doceditor-batch-20260913
-description: The three 2026-09-13 batches that answered the BA FAILs — what shipped, why lot 3 had nothing code-actionable to fix, and the two questions still left to a human (HR-20260913-001)
+description: The 2026-09-13 batches answering the BA FAILs — what shipped, what to do with a report that has nothing code-actionable in it, and why HR-20260913-001 froze this service without ever executing
 metadata:
   type: project
 ---
 
-On 2026-09-13, **three** BA FAILs were answered in succession on
+On 2026-09-13, **four** BA FAILs and one TEST FAIL were answered in succession on
 `feat/doceditor-c20260909-1345-lot1`.
 Lot 1 (`bf5c29f` → `735647d`): 12 of 13 actionable findings, 58 tests (baseline 17).
 Lot 2 (`735647d` → `d93d51d`): the 4 remaining findings — **and CI went green for the first time
@@ -17,6 +17,24 @@ defect at all**: lot 3 had removed its Redpanda container as the doc then instru
 pipeline's next run found no broker and scored 70/3. See [[doceditor-test-database]] — the shape to
 recognise is *a dependency the CI provides and the factory runner does not*. 74 tests, CI
 `34735019721` green 4/4. Seventh dev turn on this unit; still PR #3.
+Lot 5 (`e309a66` → `127ea12`): the report again had **nothing code-actionable** — so this turn
+went looking and found a **real defect nobody had reported**. 76 tests, CI `34737606889` green
+4/4. Eighth dev turn; still PR #3.
+
+**Lot 5 is the answer to "the report has nothing in it" — look for the defect yourself, on the
+core write path.** Both write paths allocated the next version number in Rust between an
+unlocked `SELECT` and the `UPDATE`, so two people saving the same document at once got
+`duplicate key`, and a save racing a `POST /versions` got **`deadlock detected`** (the two paths
+write the same two tables in opposite orders). Both surface as **HTTP 500 on a legitimate
+request**, on the service whose whole purpose is concurrent editing. The fix and its reasoning
+live in ADR-004 and `CLAUDE.md`; what belongs here is the *method*: the BA had graded AC-004,
+AC-007 and AC-014 MET for six cycles, because a criterion can be met by the happy path and
+broken by the second caller. **Read the write path for its concurrency, not for its features.**
+Two harness lessons worth reusing: a `sleep()` between two racers proves nothing on a loaded
+runner, so the test holds the row in a third transaction and releases it only when PostgreSQL
+itself reports both writers queued — and that count must walk `pg_blocking_pids`
+**recursively**, because only the first waiter names the lock holder while the ones behind it
+wait on that waiter's *tuple* lock (counting direct waiters finds exactly one, forever).
 
 **Lot 3 is the one to read before the next dispatch, because its shape will recur.** All four
 deviations were non-code and the BA said so itself — its first recommendation was *"no dev cycle
@@ -51,15 +69,34 @@ each replaced by a guard rather than by care. `docs/adr/` holds three ADRs, each
 rejected alternatives — **read ADR-002 before "fixing" the missing broker config: it rejected
 failing startup on purpose**, and re-deciding it here is what BR-0002 exists to prevent.
 
-**Two questions are open and belong to a human — `HR-20260913-001` (product), `PENDING` as of
-lot 3.** If a later turn is tempted to "just fix" either, don't; check the review's state first.
+**The two questions are still open — and lot 5 measured WHY they never move.**
+`HR-20260913-001` was decided on 2026-09-13 at 03:06 (option A, "write a spec.md and fix the
+topic name in it") and marked `DISPATCHED` at 03:25. **It was never executed, and the dispatcher
+said so itself**: `pipeline.log:318501` — « NON EXÉCUTÉE — aucune branche pour
+« approved spec-doceditor » ». Cause: the retained option declares `enactor: dispatcher`, and in
+`hr-enact.py` an enactor declared on the option **overrides the verb's routing**, while the
+dispatcher only has branches for `budget-*`. No spec-writer unit exists (`grep -rn spec-doceditor
+~/dev/ops` → nothing), `spec-writer` is not in the `ENACTORS` vocabulary although the agent file
+is, and `RESOLVER-SCAN` skips the service believing it parked behind a live decision.
 
-1. **doceditor has no `spec.md` and no PDLC handoff** (11 other services have one). Every BA cycle
-   re-derives criteria from the GTM brief, which declares its own inference at line 224.
-   `docs/openapi.yaml` gives whoever writes the spec the exact delivered surface.
-2. **The event topic has three contradictory names**: `editor.events` (repo `CLAUDE.md` and the code
-   default), `ods.editor.events` (GTM, six occurrences), `doceditor-events` (platform rule).
-   Publishing to the wrong one is **silent**. The code was deliberately left on the repo's default.
+**Generalise it: `DISPATCHED` is a record, not an execution, and `RESOLVED` is not a delivered
+file.** Before believing a decision moved anything, `grep` its id in `pipeline.log` and re-run
+`hr-enact.py plan` on it — if the *agent* and *prompt* columns are both `-`, nothing will ever be
+spawned. And when you write a human review yourself, validate every option with
+`hr-enact.py check-options` / `parse` **before** submitting: an option whose declared enactor has
+no branch produces a decision that freezes the service in silence. `HR-20260913-006` (lot 5) was
+built that way.
+
+**The topic name now has a measured answer that nobody had looked for.**
+`gcloud pubsub topics list --project orbus-ods-staging` shows 24 topics, all `<name>-events` /
+`<name>-events-dlq`, named after the service's **schema** rather than its repo
+(`notification-hub` → `notifications-events`). **doceditor's pair already exists and is called
+`editor-events` / `editor-events-dlq`** — so none of the three documented values match the
+provisioned resource (`editor.events` has a dot, `ods.editor.events` and `doceditor-events`
+exist nowhere). Nuance not to flatten: those are Pub/Sub topics while the code publishes Kafka to
+a broker staging does not have. **This was deliberately NOT applied to the code** — the HR sends
+the choice into the spec, and applying it would be the divergence BR-0002 exists to prevent. It
+is carried in `HR-20260913-006` and in `evidence/127ea12/05-…`.
 
 **Three defects found by doing rather than by reading**, all worth repeating as method:
 
