@@ -205,11 +205,20 @@ pub async fn update_document(
     } = update;
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // First fetch the current document to validate transitions
+    // First fetch the current document to validate transitions.
+    //
+    // `FOR UPDATE` is what makes the next version number safe to compute in
+    // Rust: the read and the write below are one read-modify-write on
+    // `current_version`, and without the lock two concurrent editors read the
+    // same number, both claim it, and the `UNIQUE (document_id, version)` of
+    // migration 003 turns the loser into a 500 on a legitimate save. Two
+    // editors on one document is this service's normal traffic, not an edge
+    // case. See tests/concurrency_test.rs.
     let current: Option<Document> = sqlx::query_as(&format!(
         r#"SELECT {DOC_COLUMNS}
          FROM editor.documents
-         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL"#
+         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+         FOR UPDATE"#
     ))
     .bind(document_id)
     .bind(tenant_id)

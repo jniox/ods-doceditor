@@ -77,9 +77,17 @@ pub async fn create_version(
 ) -> AppResult<DocumentVersion> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // Read the body to snapshot (defense-in-depth: filter by tenant_id)
+    // Read the body to snapshot (defense-in-depth: filter by tenant_id).
+    //
+    // `FOR UPDATE` for the same reason as in `document_repo::update_document`,
+    // and it must be the SAME lock, taken on the SAME row, in the same order:
+    // this path inserts the version row before updating the document while the
+    // update path does the reverse, so an explicit snapshot racing a save used
+    // to deadlock — each holding what the other waited for. Serialising on the
+    // document row removes both the duplicate version number and the deadlock.
+    // See tests/concurrency_test.rs.
     let row = sqlx::query(
-        "SELECT current_version, yjs_state, content FROM editor.documents WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL",
+        "SELECT current_version, yjs_state, content FROM editor.documents WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(document_id)
     .bind(tenant_id)

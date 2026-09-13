@@ -46,6 +46,16 @@ for the snapshots the service takes itself, `false` for an explicit
 `POST .../versions`. `yjs_state`/`yjs_snapshot` remain reserved for the
 collaborative CRDT layer, which is not built — do not store text in them.
 
+**Both write paths take `FOR UPDATE` on the document row before reading
+`current_version`, and that lock is not optional.** The next version number is
+computed in Rust between two statements; without the lock two concurrent saves
+claim the same number and the `UNIQUE (document_id, version)` of migration 003
+turns the loser into a 500, while a save racing an explicit snapshot *deadlocks*
+(the two paths write the same two tables in opposite orders). Any new path that
+advances `current_version` takes the same lock on the same row first. See
+ADR-004 and `tests/concurrency_test.rs`. Content is last-write-wins; what is
+guaranteed is that no edit leaves the history and no request fails.
+
 ## Multi-Tenancy
 - Auth via JWT Bearer token (RS256 production, HS256 dev/test)
 - AuthUser extractor validates JWT and extracts tenant_id + user_id from claims

@@ -242,6 +242,12 @@ paths:
         Status transitions are restricted: `draft -> published`,
         `draft -> archived`, `published -> archived`. Anything else is a 400,
         including a return to `draft`.
+
+        Concurrent writers on the same document are serialised server-side:
+        both edits succeed, each takes its own version number, and the body of
+        whichever committed last is the current one. There is no `If-Match`
+        precondition and no 409 — restoring the other edit is done through the
+        version history.
       requestBody:
         required: true
         content:
