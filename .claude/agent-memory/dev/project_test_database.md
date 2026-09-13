@@ -75,11 +75,31 @@ is itself in the diff, read the live run (`gh run view <id> --log-failed`), neve
 **Since 2026-09-13 the suite also needs a BROKER, and it does not skip without one.**
 `tests/events_roundtrip.rs` publishes through the real `RedpandaProducer` and consumes back;
 `common::broker_addr()` falls back to `127.0.0.1:19092` (announced on stderr) and CI sets
-`REDPANDA_BROKERS` explicitly. Start one locally with the `docker run` line in `CLAUDE.md`'s
-`## Tests` block — and **remove it afterwards**. CI starts it with `docker run`, not a `services:`
-container: GitHub Actions offers no way to pass a command to a service container and
-`redpanda start` needs its listener flags. Without a broker the tests fail in **15s**, naming the
-address; that is deliberate, see [[doceditor-batch-20260913]].
+`REDPANDA_BROKERS` explicitly. CI starts it with `docker run`, not a `services:` container:
+GitHub Actions offers no way to pass a command to a service container and `redpanda start` needs
+its listener flags. Without a broker the tests fail in **15s**, naming the address; that is
+deliberate, see [[doceditor-batch-20260913]].
+
+**The broker is a STANDING container — this note used to say "remove it afterwards", and following
+that advice is what turned the suite red.** Count the runners before trusting any test
+prerequisite: **three run this suite and only two bring a broker.** CI brings its own per run; a
+developer types the line; the **ADLC pipeline** (`~/dev/ops/adlc-v2/scripts/test-runner.sh`) brings
+neither — it runs `cargo test --all` on a long-lived host with *no* environment, and it provisions
+Postgres (`lib/db-schema-guard.sh`) but has **no symmetric guard for the bus**. On 2026-09-13 the
+previous lot dutifully removed its container after capturing evidence and fifteen minutes later the
+pipeline scored 70 green / 3 red and wrote FAIL on the service — an infrastructure gap read as a
+code regression, and a seventh dev turn. Closed by *providing* the dependency, never by skipping
+it: `doceditor-redpanda-dev`, `--restart unless-stopped`, 19092 — same class of prerequisite as
+`ods-postgres` on 5435. Before reading three red round-trip tests as a regression, run
+`docker exec doceditor-redpanda-dev rpk cluster info --brokers 127.0.0.1:19092`.
+
+**The failure now carries its own remedy, and that was the only repo-side defect in the triage.**
+The pipeline's triage reads `~/dev/ops/outputs/doceditor-test.log`, not this repository; the old
+panic named the address and pointed at `tests/common/mod.rs`, which costs a whole turn to open and
+re-derive one `docker run` line. `START_A_BROKER` in `tests/events_roundtrip.rs` is asserted to
+advertise `common::FALLBACK_BROKERS`, so a remedy starting a broker at an address nobody dials
+cannot ship. Generalise it: **when a test can only fail for an environmental reason, put the fix
+command in the failure text.**
 
 **The `## Tests` block of `CLAUDE.md` said port 5433 until 2026-09-13** — twenty lines under the
 paragraph explaining that 5433 is another project's container. The Database section had been fixed

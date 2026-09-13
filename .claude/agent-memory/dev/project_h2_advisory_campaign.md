@@ -19,7 +19,8 @@ to commit.**
 **Why it keeps coming back:** **PR #3 is still OPEN** (`MERGEABLE`/`CLEAN`, base `dev`; it started
 at 4 files and now carries three further lots). Its non-merge — and nothing else — re-opens the work
 unit on every dispatcher pass. **Merging is the `pr` agent's role, not dev's.** As of 2026-09-13,
-after lot 3, this has burnt **six** dev turns. Say so explicitly in the status so the loop is
+after a fourth turn on the same branch (a TEST FAIL triage whose cause was an absent broker on
+the host, not code), this has burnt **seven** dev turns. Say so explicitly in the status so the loop is
 visible rather than re-diagnosed — and note that the later dispatches arrive dressed as *BA FAIL*
 rather than as the h2 unit, which makes the loop harder to recognise: check `gh pr list --state all`
 before believing the framing.

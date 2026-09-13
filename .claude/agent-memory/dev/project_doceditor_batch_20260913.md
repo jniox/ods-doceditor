@@ -12,6 +12,11 @@ Lot 2 (`735647d` → `d93d51d`): the 4 remaining findings — **and CI went gree
 in the repository's history** (run `34731214292`, 4/4 jobs, 70 tests).
 Lot 3 (`13e1e2f` → `329f548`): **nothing in the report was code-actionable.** 73 tests, CI
 `34733129191` green 4/4.
+Lot 4 (`544b85d` → `d211545`) was **not** a BA FAIL but a **TEST FAIL**, and it contained **no code
+defect at all**: lot 3 had removed its Redpanda container as the doc then instructed, so the
+pipeline's next run found no broker and scored 70/3. See [[doceditor-test-database]] — the shape to
+recognise is *a dependency the CI provides and the factory runner does not*. 74 tests, CI
+`34735019721` green 4/4. Seventh dev turn on this unit; still PR #3.
 
 **Lot 3 is the one to read before the next dispatch, because its shape will recur.** All four
 deviations were non-code and the BA said so itself — its first recommendation was *"no dev cycle

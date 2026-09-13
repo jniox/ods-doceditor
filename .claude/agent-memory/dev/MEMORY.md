@@ -1,4 +1,4 @@
 - [h2 advisory campaign](project_h2_advisory_campaign.md) — HR-20260909-001: already delivered here, why the unit keeps re-opening, and the runbook premises that were false
-- [Test database & CI](project_test_database.md) — the 5435 fallback, the `editor` schema race a virgin DB exposes, shared-instance collisions, and why local green proves nothing
-- [Batches 2026-09-13](project_doceditor_batch_20260913.md) — three BA FAILs answered, what to do when none of the findings is code-actionable, and the two questions left to HR-20260913-001
+- [Test database, broker & CI](project_test_database.md) — the 5435 fallback, the STANDING broker on 19092 (removing it is what turns the suite red), the virgin-DB schema race, and why local green proves nothing
+- [Batches 2026-09-13](project_doceditor_batch_20260913.md) — three BA FAILs + one TEST FAIL answered, what to do when no finding is code-actionable, and the two questions left to HR-20260913-001
 - [Scope of an order](feedback_scoped_mechanical_fix.md) — when an order names one file stay in it; when it says "fix the BA report" it does not — and the idle-watchdog's `wip:` commit
