@@ -16,11 +16,13 @@ on branch `feat/doceditor-c20260909-1345-lot1`, and re-verified green on 2026-09
 2026-09-12**. If this unit is dispatched again: **verify and report, do not redo — there is nothing
 to commit.**
 
-**Why it keeps coming back:** **PR #3 is still OPEN** (`MERGEABLE`/`CLEAN`, base `dev`, 4 files:
-`Cargo.toml`, `Cargo.lock`, `tests/framework.rs`, `tests/api_test.rs`). Its non-merge — and nothing
-else — re-opens the work unit on every dispatcher pass. **Merging is the `pr` agent's role, not
-dev's.** As of 2026-09-12 this had already burnt three dev turns. Say so explicitly in the status so
-the loop is visible rather than re-diagnosed.
+**Why it keeps coming back:** **PR #3 is still OPEN** (`MERGEABLE`/`CLEAN`, base `dev`; it started
+at 4 files and now carries three further lots). Its non-merge — and nothing else — re-opens the work
+unit on every dispatcher pass. **Merging is the `pr` agent's role, not dev's.** As of 2026-09-13,
+after lot 3, this has burnt **six** dev turns. Say so explicitly in the status so the loop is
+visible rather than re-diagnosed — and note that the later dispatches arrive dressed as *BA FAIL*
+rather than as the h2 unit, which makes the loop harder to recognise: check `gh pr list --state all`
+before believing the framing.
 
 **How to apply — the evidence to re-run (all cheap except the last two):**
 `cargo tree -e normal -i h2` → *"nothing to print"* (h2 is absent from the shipped graph **entirely**,

@@ -1,6 +1,6 @@
 ---
 name: doceditor-test-database
-description: How doceditor's integration tests reach Postgres — the 5435 fallback, why the `editor` schema must pre-exist, the shared-instance collisions, and what CI now provides
+description: How doceditor's integration tests reach Postgres and the broker — the 5435 fallback, why the `editor` schema must pre-exist, the shared-instance collisions, and what CI now provides
 metadata:
   type: project
 ---
@@ -71,3 +71,17 @@ is itself in the diff, read the live run (`gh run view <id> --log-failed`), neve
 
 `cargo fmt --check` used to be red on ~40 pre-existing sites; the whole crate was formatted on
 2026-09-13 in a dedicated style commit, so it is clean and must stay clean.
+
+**Since 2026-09-13 the suite also needs a BROKER, and it does not skip without one.**
+`tests/events_roundtrip.rs` publishes through the real `RedpandaProducer` and consumes back;
+`common::broker_addr()` falls back to `127.0.0.1:19092` (announced on stderr) and CI sets
+`REDPANDA_BROKERS` explicitly. Start one locally with the `docker run` line in `CLAUDE.md`'s
+`## Tests` block — and **remove it afterwards**. CI starts it with `docker run`, not a `services:`
+container: GitHub Actions offers no way to pass a command to a service container and
+`redpanda start` needs its listener flags. Without a broker the tests fail in **15s**, naming the
+address; that is deliberate, see [[doceditor-batch-20260913]].
+
+**The `## Tests` block of `CLAUDE.md` said port 5433 until 2026-09-13** — twenty lines under the
+paragraph explaining that 5433 is another project's container. The Database section had been fixed
+earlier the same day and this one was missed, which is the general shape of the thing: *a document
+that warns about a trap can still contain it.* Trust `docker ps`.
