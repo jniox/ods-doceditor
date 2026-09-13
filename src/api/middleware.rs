@@ -4,6 +4,8 @@ use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::middleware::Next;
 use actix_web::{dev::Payload, Error, FromRequest, HttpMessage, HttpRequest};
 use std::future::{ready, Ready};
+use std::time::Instant;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::correlation::{self, CORRELATION_ID_HEADER, SOURCE_SERVICE_HEADER, TENANT_ID_HEADER};
@@ -71,10 +73,28 @@ pub async fn correlate(
         method = %req.method(),
         path = %req.path(),
     );
-    let _guard = span.enter();
-
     let echoed = correlation_id.clone();
-    let mut res = correlation::scope(correlation_id, next.call(req)).await?;
+    let started = Instant::now();
+
+    // `.instrument()` and not `span.enter()`: a guard held across an `.await`
+    // stays active on the thread while the task is parked, which attaches the
+    // span to whatever unrelated work the executor runs next. Instrumenting the
+    // future makes the span follow the task instead of the thread.
+    let mut res = correlation::scope(correlation_id, next.call(req))
+        .instrument(span.clone())
+        .await?;
+
+    // One access log per request, inside the span, so the correlation id is
+    // actually in the logs. A span under which no event is emitted records
+    // nothing: before this line the correlation id reached the response header
+    // and the events, and nothing else.
+    span.in_scope(|| {
+        tracing::info!(
+            status = res.status().as_u16(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "request completed"
+        )
+    });
 
     if let Ok(value) = HeaderValue::from_str(&echoed) {
         res.headers_mut()
