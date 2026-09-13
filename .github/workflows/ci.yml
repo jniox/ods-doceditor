@@ -28,11 +28,19 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      # Same list as the Dockerfile's builder stage, and kept so by
+      # tests/ci_workflow.rs: it is the same compilation. `rdkafka` is taken
+      # with `cmake-build`, so librdkafka is compiled from source here, and
+      # rdkafka_conf.c includes <curl/curl.h> even with -DWITH_CURL=0 --
+      # without libcurl4-openssl-dev this job dies before compiling a single
+      # line of this repository, while staying green on any development
+      # machine, which has those headers installed system-wide.
       - name: Install system build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev libsasl2-dev cmake build-essential
+            build-essential cmake pkg-config libssl-dev \
+            libcurl4-openssl-dev libsasl2-dev curl
 
       - name: Check formatting
         run: cargo fmt --check
@@ -104,11 +112,19 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      # Same list as the Dockerfile's builder stage, and kept so by
+      # tests/ci_workflow.rs: it is the same compilation. `rdkafka` is taken
+      # with `cmake-build`, so librdkafka is compiled from source here, and
+      # rdkafka_conf.c includes <curl/curl.h> even with -DWITH_CURL=0 --
+      # without libcurl4-openssl-dev this job dies before compiling a single
+      # line of this repository, while staying green on any development
+      # machine, which has those headers installed system-wide.
       - name: Install system build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev libsasl2-dev cmake build-essential
+            build-essential cmake pkg-config libssl-dev \
+            libcurl4-openssl-dev libsasl2-dev curl
 
       - name: Run tests
         run: cargo test -- --nocapture
