@@ -1,0 +1,549 @@
+openapi: 3.1.0
+info:
+  title: ODS DocEditor API
+  version: "1.0.0"
+  summary: Multi-tenant structured document authoring and versioning.
+  description: |
+    DocEditor is the shared document authoring and versioning service of the ODS
+    Platform. Products bring their own rich-text component; DocEditor owns the
+    canonical storage, the immutable version history and the tenant isolation.
+
+    **Versioning model.** A document is created at version 1, whose body is
+    snapshotted immediately. Every subsequent change to `content` advances
+    `current_version` and writes a new immutable version row in the same
+    transaction. Products may also take an explicit snapshot at any time via
+    `POST /documents/{id}/versions`. Version rows are insert-only: there is no
+    update or delete path on them.
+
+    **Tenancy.** The tenant is taken from the validated `tenant_id` claim of the
+    OID JWT, never from a request field or header. `X-Tenant-Id` is accepted and
+    logged for traceability only.
+
+    **Events.** Every state change emits a CloudEvents v1.0 message to the
+    configured Redpanda topic, in binary content mode: attributes travel as
+    `ce_*` headers (`ce_specversion`, `ce_id`, `ce_source`, `ce_type`, `ce_time`,
+    `ce_tenantid`, and `ce_correlationid` when the request carried one), and the
+    body carries the event data. Messages are keyed by document id so a
+    document's history keeps its order.
+
+    Published per BR-0007 (OpenAPI 3.1, validated in CI). BR-0007 enumerates
+    eight services and does not name doceditor; this contract is published
+    against the service's own GTM gate ("required before Phase 2"), in the
+    format BR-0007 mandates.
+  contact:
+    name: ODS Platform
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://doceditor.staging.orbusdigital.com
+    description: Staging
+  - url: http://127.0.0.1:8087
+    description: Local development
+
+tags:
+  - name: health
+    description: Unauthenticated probes.
+  - name: documents
+    description: Document lifecycle.
+  - name: versions
+    description: Immutable version history.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      description: Answers without authentication and without touching the database.
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service, version]
+                properties:
+                  status: { type: string, const: ok }
+                  service: { type: string, const: doceditor }
+                  version: { type: string, examples: ["0.1.0"] }
+
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness probe
+      description: Answers without authentication; verifies database connectivity.
+      security: []
+      responses:
+        "200":
+          description: The database is reachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database]
+                properties:
+                  status: { type: string, const: ok }
+                  database: { type: string, const: connected }
+        "503":
+          description: The database is unreachable; do not route traffic here.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database]
+                properties:
+                  status: { type: string, const: unavailable }
+                  database: { type: string, const: disconnected }
+
+  /api/v1/documents:
+    post:
+      tags: [documents]
+      summary: Create a document
+      description: |
+        Creates a document in `draft` at version 1 and snapshots its body as
+        version 1. `content` and `template_id` are mutually exclusive.
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/SourceService"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDocumentRequest" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/CorrelationId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The referenced template does not exist for this tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+    get:
+      tags: [documents]
+      summary: List documents
+      description: |
+        Tenant-scoped, paginated, newest-updated first. Bodies are **not**
+        included: fetch the document itself for those.
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_page
+          in: query
+          required: false
+          description: Clamped to 100.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DocumentStatus" }
+        - name: search
+          in: query
+          required: false
+          description: Full-text search over the title and the body.
+          schema: { type: string }
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/SourceService"
+      responses:
+        "200":
+          description: A page of documents.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/CorrelationId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documents, total, page, per_page]
+                properties:
+                  documents:
+                    type: array
+                    items: { $ref: "#/components/schemas/DocumentSummary" }
+                  total:
+                    type: integer
+                    description: Size of the whole collection, not of the page.
+                  page: { type: integer }
+                  per_page: { type: integer }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/documents/{id}:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/CorrelationId"
+      - $ref: "#/components/parameters/SourceService"
+    get:
+      tags: [documents]
+      summary: Retrieve a document, body included
+      responses:
+        "200":
+          description: The document.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/CorrelationId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [documents]
+      summary: Update a document
+      description: |
+        Any omitted field is left untouched. Supplying `content` advances
+        `current_version` and writes an immutable version row.
+
+        Status transitions are restricted: `draft -> published`,
+        `draft -> archived`, `published -> archived`. Anything else is a 400,
+        including a return to `draft`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateDocumentRequest" }
+      responses:
+        "200":
+          description: The updated document.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/CorrelationId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+    delete:
+      tags: [documents]
+      summary: Soft-delete a document
+      description: |
+        The document is hidden from reads and its status becomes `archived`, but
+        the row and its whole version history are retained.
+      responses:
+        "204":
+          description: Deleted.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/CorrelationId" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/documents/{id}/versions:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/CorrelationId"
+      - $ref: "#/components/parameters/SourceService"
+    post:
+      tags: [versions]
+      summary: Take an explicit version snapshot
+      description: |
+        Snapshots the document as it currently stands at `current_version + 1`.
+        Such a version carries `is_auto: false`, unlike the snapshots the service
+        takes itself at creation and on every content change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVersionRequest" }
+      responses:
+        "201":
+          description: The new version.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/CorrelationId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionSummary" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+    get:
+      tags: [versions]
+      summary: List the version history
+      description: Most recent version first. Bodies are not included.
+      responses:
+        "200":
+          description: The version history.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/CorrelationId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [versions]
+                properties:
+                  versions:
+                    type: array
+                    items: { $ref: "#/components/schemas/VersionSummary" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/documents/{doc_id}/versions/{version}:
+    parameters:
+      - name: doc_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+      - $ref: "#/components/parameters/CorrelationId"
+      - $ref: "#/components/parameters/SourceService"
+    get:
+      tags: [versions]
+      summary: Retrieve one prior version, body included
+      description: This is the read a product uses to restore a prior state.
+      responses:
+        "200":
+          description: The version.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/CorrelationId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Version" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        OID-issued JWT. RS256 in production (`JWT_RSA_PUBLIC_KEY_B64`); HS256 is
+        accepted only when `JWT_ALLOW_HS256=true`, for development. The token
+        must carry `sub` and `tenant_id`.
+
+  parameters:
+    DocumentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: |
+        Trace identifier. Adopted when supplied, generated otherwise, and always
+        echoed back on the response.
+      schema: { type: string }
+    SourceService:
+      name: X-Source-Service
+      in: header
+      required: false
+      description: The calling ODS service, for log correlation.
+      schema: { type: string }
+
+  headers:
+    CorrelationId:
+      description: The correlation id used for this request.
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Malformed request or forbidden status transition.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing, malformed or expired token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: |
+        No such resource for this tenant. Another tenant's resource is reported
+        the same way, deliberately: a distinguishable response would be an
+        existence oracle across tenants.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: The request was well-formed but a value is unacceptable.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    DocumentStatus:
+      type: string
+      enum: [draft, published, archived]
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum:
+            - validation_error
+            - not_found
+            - conflict
+            - unauthorized
+            - forbidden
+            - bad_request
+            - internal_error
+        message: { type: string }
+
+    CreateDocumentRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Non-blank once trimmed.
+        content:
+          type: string
+          description: |
+            The document body — HTML, Markdown or JSON, as the calling product
+            prefers; DocEditor stores it verbatim. Bounded by
+            `MAX_DOCUMENT_SIZE_MB`. Mutually exclusive with `template_id`.
+        template_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            Start from this template's body. Visible templates are the tenant's
+            own plus the platform's system templates. Mutually exclusive with
+            `content`.
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+      examples:
+        - title: Contrat de prestation
+          content: "<h1>Article 1</h1><p>Les parties conviennent.</p>"
+          metadata: { kind: contract }
+
+    UpdateDocumentRequest:
+      type: object
+      description: Every field is optional; omitted fields are left untouched.
+      properties:
+        title: { type: string, minLength: 1, maxLength: 500 }
+        status: { $ref: "#/components/schemas/DocumentStatus" }
+        content:
+          type: string
+          description: Supplying this advances the version and snapshots it.
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+
+    CreateVersionRequest:
+      type: object
+      properties:
+        comment:
+          type: [string, "null"]
+          maxLength: 500
+          description: Why this snapshot was taken.
+
+    Metadata:
+      type: object
+      description: |
+        At most 20 keys. Keys match `^[a-z][a-z0-9_]{0,63}$`; string values are
+        at most 256 characters.
+      maxProperties: 20
+      additionalProperties: true
+
+    DocumentSummary:
+      type: object
+      description: A document without its body, as returned by the list endpoint.
+      required:
+        [
+          id,
+          tenant_id,
+          title,
+          status,
+          created_by,
+          created_at,
+          updated_at,
+          current_version,
+          word_count,
+          metadata,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        title: { type: string }
+        status: { $ref: "#/components/schemas/DocumentStatus" }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        deleted_at: { type: [string, "null"], format: date-time }
+        current_version: { type: integer, minimum: 1 }
+        word_count:
+          type: integer
+          description: |
+            Whitespace-separated word count of the body. A display hint: markup
+            is not stripped, so it is approximate on HTML.
+        metadata: { $ref: "#/components/schemas/Metadata" }
+
+    Document:
+      allOf:
+        - $ref: "#/components/schemas/DocumentSummary"
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: string
+              description: The document body at `current_version`.
+
+    VersionSummary:
+      type: object
+      description: A version record without its body.
+      required: [version, created_at, created_by, snapshot_size_bytes]
+      properties:
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        created_by: { type: string, format: uuid }
+        snapshot_size_bytes:
+          type: integer
+          description: Size of the snapshotted body, in bytes.
+        comment: { type: [string, "null"] }
+        is_auto:
+          type: boolean
+          description: |
+            `true` when the service took the snapshot itself (document creation,
+            content change); `false` when a product asked for it explicitly.
+
+    Version:
+      allOf:
+        - $ref: "#/components/schemas/VersionSummary"
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: string
+              description: The immutable body of this version.
