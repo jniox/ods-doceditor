@@ -97,10 +97,30 @@ This is required because the dev DB is shared across services.
 
 ## Tests
 ```bash
-DATABASE_URL="postgres://ods:ods-dev-2026@127.0.0.1:5433/ods" JWT_ALLOW_HS256=true JWT_SECRET=test-secret-for-doceditor-jwt-validation-only cargo test
-cargo clippy -- -D warnings
+# 5435. The line above this block spent months saying 5433, which is another
+# project's container on this host — the trap the Database section describes.
+export DATABASE_URL="postgres://ods:ods-dev-2026@127.0.0.1:5435/ods?options=-c%20search_path%3Deditor%2Cpublic"
+export JWT_ALLOW_HS256=true JWT_SECRET=test-secret-for-doceditor-jwt-validation-only
+export REDPANDA_BROKERS=127.0.0.1:19092
+cargo test
+cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+`tests/events_roundtrip.rs` needs a **real broker** and does not skip without
+one: this service published four months of CloudEvents into a `NoopProducer`
+and nothing failed, so "the producer returned Ok" is not evidence. Start one:
+
+```bash
+docker run -d --name doceditor-redpanda-test -p 127.0.0.1:19092:19092 \
+  docker.redpanda.com/redpandadata/redpanda:v24.2.7 \
+  redpanda start --smp 1 --overprovisioned --node-id 0 --check=false \
+    --mode dev-container --kafka-addr PLAINTEXT://0.0.0.0:19092 \
+    --advertise-kafka-addr PLAINTEXT://127.0.0.1:19092
+```
+
+CI starts the same image in the `test` job and sets `REDPANDA_BROKERS`
+explicitly; the fallback in `tests/common/mod.rs` is a local convenience only.
 
 ## Environment Variables
 `.env.example` lists exactly what `src/config.rs` reads — keep the two in step.

@@ -89,3 +89,75 @@ ods-postgres, full authoring cycle exercised (create with body → 2 edits →
 cross-tenant 404 → soft delete → 404), probes without auth, 401 without token,
 422/400/404 on the validation paths, correlation id echoed and present in the
 structured logs, RLS bypass warning naming the role.
+
+---
+
+## Lot 3 — 2026-09-13 — BA FAIL at `13e1e2f` (17 MET / 1 PARTIAL / 1 MISSING / 1 DEVIATION)
+
+### What the report actually contained
+
+Every one of the four deviations is **non-code**, and two of them are already
+in front of a human. Read in order:
+
+| Finding | Severity | Owner | Disposition this lot |
+|---|---|---|---|
+| AC-000: no `spec.md` for doceditor (5th cycle) | CRITICAL | human | **Reported, not fixed.** Writing it invents the requirement. `HR-20260913-001` is open and still `PENDING`. |
+| AC-012: `ops/cloudrun/doceditor.json` sets no `REDPANDA_BROKERS` | MEDIUM | devops | **Reported, not fixed.** The file is outside this repository and the gap is platform-wide (`oid`, `pdf-engine`, `securemail` carry the same note). |
+| AC-011: the `ods` role is `SUPERUSER`+`BYPASSRLS`, so RLS is inert | MEDIUM | ops | **Reported, not fixed.** An operational role change; the service already measures and logs its own posture at startup. |
+| Topic name has three values | MEDIUM | human | **Reported, not decided.** Same `HR-20260913-001`. ADR-002 declines it on purpose. |
+
+So this lot could not make the service compliant, and did not try to. What it
+could do is close the one Code-Agent-owned item still open in the source the BA
+re-derives its criteria from.
+
+### Delivered: the event round trip, against a real broker
+
+GTM brief, *Known Limitations* #2 (MEDIUM, "verify before Phase 1", owner
+**Code Agent**): *"Verify at least one integration test publishes and reads a
+document lifecycle event from a Redpanda instance. Add if missing."* It was
+missing. Its risk row — *"CloudEvent emission silently broken (nil producer
+pattern)"* — is not hypothetical here: it is what happened, for four months.
+
+- [x] `tests/events_roundtrip.rs` — publish through `RedpandaProducer`, consume
+      back, assert the `ce_*` headers, the document-id partition key and the
+      binary-content-mode body. 3 tests.
+- [x] `tests/common/mod.rs::broker_addr()` — **no skip path**. Without a broker
+      the tests fail, in 15s, naming the address they could not reach.
+- [x] `.github/workflows/ci.yml` — the `test` job starts the broker
+      (`docker run`, not a `services:` container: Actions cannot pass a command
+      to one) and sets `REDPANDA_BROKERS` explicitly.
+- [x] `CLAUDE.md` — the test command said port **5433**, twenty lines under the
+      paragraph explaining that 5433 is another project's container. Corrected,
+      with the broker documented.
+
+**Why this is worth more than an assertion on `publish()`'s return value:**
+`send_result` enqueues and returns, so `Ok` is an enqueue receipt, not a
+delivery. Confirmed by mutation, both directions:
+
+- `RedpandaProducer::publish` returning `Ok(())` without sending — i.e. the
+  `NoopProducer` regression, exactly — turns 2 of the 3 tests red
+  (`0 of 5 lifecycle events came back`).
+- `kafka_record` writing a wrong `ce_tenantid` turns the first red
+  (`an event reached the bus without the tenant it belongs to`).
+- Pointed at a dead broker, the suite fails loudly rather than skipping
+  (`could not reach the broker at 127.0.0.1:19999 … This test does not skip`).
+- The third test publishes nothing and requires the consumer to come back
+  empty, so the other two cannot pass on a stale subscription.
+
+### Not done, deliberately
+
+- **No `.env.example` change.** Its DSN omits the `?options=` pin, which reads
+  like the trap `CLAUDE.md` describes — but it is not one: `ensure_schema_exists`
+  runs before `migrate!` and PostgreSQL re-resolves `search_path` after the
+  schema appears on the same session. Left alone rather than churned.
+- **No index added** for the GTM's "version volume" risk row: it asks for
+  `(document_id, created_at)`, and `idx_versions_document (document_id, version
+  DESC)` already covers the only ordering this service queries by.
+- **No hard failure when `REDPANDA_BROKERS` is unset.** ADR-002 rejected that
+  explicitly, and re-implementing against a recorded decision is what BR-0002
+  exists to prevent.
+
+### Verification
+
+73 tests green (70 before), `clippy --all-targets -D warnings` clean,
+`fmt --check` clean, live CI run checked on the pushed head.
