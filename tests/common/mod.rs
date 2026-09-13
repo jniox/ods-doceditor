@@ -13,7 +13,10 @@
 //!    another service's migration history (symptom: `VersionMissing(7)`).
 //! 2. The `editor` schema is created here, before `migrate!` runs, for the
 //!    same reason: PostgreSQL silently drops a non-existent schema from
-//!    `search_path`, so pinning alone is not enough on a fresh database.
+//!    `search_path`, so pinning alone is not enough on a fresh database. It
+//!    goes through `repository::schema::ensure_schema_exists` rather than a
+//!    bare statement, because the creation races against itself when test
+//!    threads start together -- invisible here, fatal on CI's fresh database.
 #![allow(dead_code)]
 
 use sqlx::postgres::PgPoolOptions;
@@ -50,8 +53,11 @@ pub async fn setup_test_pool() -> sqlx::PgPool {
         .await
         .expect("Failed to connect to test database");
 
-    // Must precede `migrate!`: see the note at the top of this module.
-    pool.execute("CREATE SCHEMA IF NOT EXISTS editor")
+    // Must precede `migrate!`: see the note at the top of this module. Goes
+    // through the service's own helper because `CREATE SCHEMA IF NOT EXISTS`
+    // races against itself on a fresh database -- which is what CI is, and
+    // where three tests died on 2026-09-13. See repository::schema.
+    ods_doceditor::repository::schema::ensure_schema_exists(&pool, "editor")
         .await
         .expect("Failed to ensure the editor schema exists");
 

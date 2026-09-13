@@ -56,12 +56,12 @@ async fn main() -> std::io::Result<()> {
     // migration that creates this schema. PostgreSQL silently drops a
     // non-existent schema from `search_path`, so on a fresh database the
     // tracking table would land in `public` — shared with other services.
-    {
-        use sqlx::Executor;
-        pool.execute("CREATE SCHEMA IF NOT EXISTS editor")
-            .await
-            .expect("Failed to ensure the editor schema exists");
-    }
+    // Concurrency-safe: `IF NOT EXISTS` is a look followed by an insert and
+    // races against itself, so two instances starting together on a fresh
+    // database would crash-loop one of them. See repository::schema.
+    ods_doceditor::repository::schema::ensure_schema_exists(&pool, "editor")
+        .await
+        .expect("Failed to ensure the editor schema exists");
 
     // Run migrations
     sqlx::migrate!("./migrations")
