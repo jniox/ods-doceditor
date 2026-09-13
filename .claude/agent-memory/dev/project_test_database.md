@@ -25,10 +25,22 @@ that fallback on stderr (settled 2026-09-10 by **HR-20260909-035**, sha `2b604b4
    dies on `VersionMissing(7)`. `after_connect`'s `SET search_path` does not save you — PostgreSQL
    silently ignores a non-existent schema in the path.
 
-**How to apply:** the harness and `src/main.rs` both run `CREATE SCHEMA IF NOT EXISTS editor`
-**before** `migrate!` now, so the chicken-and-egg is closed in code rather than by a manual psql
-gesture. The `?options=` pin is still what keeps `_sqlx_migrations` in `editor` afterwards; both
-are needed, neither is sufficient alone. The old `DELETE FROM _sqlx_migrations WHERE description
+**How to apply:** the harness and `src/main.rs` both ensure the `editor` schema exists **before**
+`migrate!` now, so the chicken-and-egg is closed in code rather than by a manual psql gesture. The
+`?options=` pin is still what keeps `_sqlx_migrations` in `editor` afterwards; both are needed,
+neither is sufficient alone.
+
+**A shared instance that has existed for months hides every fresh-database defect, and CI is where
+they surface.** `CREATE SCHEMA IF NOT EXISTS` is **not safe against itself** — the look and the
+insert are not atomic, so concurrent racers get `23505` on `pg_namespace_nspname_index` instead of
+a no-op. It is unreproducible here (the `editor` schema exists, so the check short-circuits before
+any race) and it killed three `api_test` cases the first time CI ever reached the tests, on
+2026-09-13. Both call sites go through `repository::schema::ensure_schema_exists` now, which
+accepts having lost and then *confirms* the postcondition against `pg_namespace`. **An advisory
+lock would not have been enough** — migration 001 runs the same statement under sqlx's own
+migration lock, so two different locks are held and can still collide. Generalise it: any
+concurrent `CREATE … IF NOT EXISTS` (SCHEMA, ROLE, EXTENSION) must tolerate the duplicate error,
+and **a defect that only a virgin database shows will never appear on this instance**. The old `DELETE FROM _sqlx_migrations WHERE description
 LIKE …` is **gone** — migrations are idempotent, the tracking table is now correct, and deleting
 rows before a concurrent `migrate!` was a race waiting to fire as test binaries multiplied.
 Read `VersionMissing(N)` as *shared migration table*, never as a corrupt migration.
@@ -44,11 +56,18 @@ matched **`securemail.templates`**, and therefore never created the policy on `e
 which sat RLS-enabled and unprotected until 2026-09-13. Anything querying `pg_policies`,
 `pg_class` or `information_schema` must filter on the schema. See [[doceditor-batch-20260913]].
 
-**CI is no longer environmentally red.** As of 2026-09-13 `.github/workflows/ci.yml` triggers on
-pull requests to **`dev`** (it only listened to `staging`, so PRs from feature branches ran
-nothing) and the `test` job gets a `postgres:17` service with the DSN pinned the way the harness
-needs. Before that, `cargo test` stopped at the first failing target, so `tests/framework.rs` —
-the [[h2-advisory-campaign]] guards — was never reached in CI either.
+**CI is GREEN, for the first time in the repository's history** — run `34731214292` on
+2026-09-13, 4/4 jobs, 70 tests. `gh run list -L 100` shows exactly **one** `success` in a hundred;
+everything since 2026-05-02 was `failure` or `startup_failure`. It took three separate fixes, in
+this order, each hidden by the one before it: the trigger listened only to `staging` (so a PR to
+`dev` ran nothing); then the `lint` and `test` jobs lacked `libcurl4-openssl-dev`, which
+`rdkafka`'s `cmake-build` needs and which the Dockerfile's builder stage had always installed — so
+nothing compiled at all; then the schema race above. **`tests/ci_workflow.rs` now reads the
+workflow's apt list against the Dockerfile's and fails when a `cargo` job installs less.**
+
+Corollary worth keeping: **a green local run proves nothing about CI.** This machine has libcurl's
+headers system-wide and a months-old `editor` schema; the runner has neither. When a CI definition
+is itself in the diff, read the live run (`gh run view <id> --log-failed`), never a local re-run.
 
 `cargo fmt --check` used to be red on ~40 pre-existing sites; the whole crate was formatted on
 2026-09-13 in a dedicated style commit, so it is clean and must stay clean.

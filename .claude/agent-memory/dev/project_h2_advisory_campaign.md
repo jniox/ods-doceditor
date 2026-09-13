@@ -51,9 +51,12 @@ traced*, and does not block. Several lots were burnt platform-wide on this exact
 **Do not add TLS features to `actix-web`** (`rustls-0_*`, `openssl`): each re-enables `http2` without
 naming it. HTTP/2 in-process (h2c) is deliberately given up — Cloud Run terminates HTTP/2 at the edge.
 
-**The guards are effective but NOT enforced in CI here.** `tests/framework.rs` holds two non-vacuous
-guards (the tree guard refuses to read a failed `cargo tree` as "no offender"; the manifest guard
-fails if `actix-web` disappears and brace-balances entries so `sqlx`'s `tls-rustls` is not mistaken
-for an actix TLS feature). But `.github/workflows/ci.yml` triggers on `pull_request: branches:
-[staging]`, so a PR to `dev` runs nothing at all — and the `test` job has no Postgres either. See
-[[doceditor-test-database]]. Deserves its own work unit; reported in PR #3.
+**The guards ARE enforced in CI since 2026-09-13 — this note said the opposite and was correct
+until then.** `tests/framework.rs` holds two non-vacuous guards (the tree guard refuses to read a
+failed `cargo tree` as "no offender"; the manifest guard fails if `actix-web` disappears and
+brace-balances entries so `sqlx`'s `tls-rustls` is not mistaken for an actix TLS feature), and they
+now actually run: CI is green for the first time in the repository's history (run `34731214292`,
+4/4 jobs, 70 tests). Three stacked fixes were needed, see [[doceditor-test-database]]. The lesson
+that outlives them: **a guard has value only if it RUNS** — check `gh pr checks` after adding one,
+because a test green locally and never executed in CI gives the illusion of protection without the
+protection.
