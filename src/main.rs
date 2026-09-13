@@ -62,6 +62,9 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to run database migrations");
     tracing::info!("Database migrations applied");
 
+    // Say out loud whether the database will actually enforce the policies.
+    ods_doceditor::repository::tenant_context::log_rls_posture(&pool).await;
+
     // Event producer (NoopProducer until Redpanda is configured)
     let producer: Arc<dyn ods_doceditor::events::producer::EventProducer> = Arc::new(NoopProducer);
 
