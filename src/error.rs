@@ -8,14 +8,8 @@ pub enum AppError {
     #[error("Not found: {0}")]
     NotFound(String),
 
-    #[error("Conflict: {0}")]
-    Conflict(String),
-
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
-
-    #[error("Forbidden: {0}")]
-    Forbidden(String),
 
     #[error("Bad request: {0}")]
     BadRequest(String),
@@ -33,12 +27,8 @@ impl ResponseError for AppError {
                 .json(serde_json::json!({"error": "validation_error", "message": msg})),
             AppError::NotFound(msg) => HttpResponse::NotFound()
                 .json(serde_json::json!({"error": "not_found", "message": msg})),
-            AppError::Conflict(msg) => HttpResponse::Conflict()
-                .json(serde_json::json!({"error": "conflict", "message": msg})),
             AppError::Unauthorized(msg) => HttpResponse::Unauthorized()
                 .json(serde_json::json!({"error": "unauthorized", "message": msg})),
-            AppError::Forbidden(msg) => HttpResponse::Forbidden()
-                .json(serde_json::json!({"error": "forbidden", "message": msg})),
             AppError::BadRequest(msg) => HttpResponse::BadRequest()
                 .json(serde_json::json!({"error": "bad_request", "message": msg})),
             AppError::Internal(msg) => {

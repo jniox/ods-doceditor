@@ -437,12 +437,14 @@ components:
       properties:
         error:
           type: string
+          # Exactly the codes src/error.rs can put on the wire, kept so by
+          # tests/error_surface.rs. `conflict` and `forbidden` were listed
+          # here until 2026-09-13 and no branch of the service could ever
+          # produce them.
           enum:
             - validation_error
             - not_found
-            - conflict
             - unauthorized
-            - forbidden
             - bad_request
             - internal_error
         message: { type: string }
