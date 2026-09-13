@@ -109,18 +109,36 @@ cargo fmt --check
 
 `tests/events_roundtrip.rs` needs a **real broker** and does not skip without
 one: this service published four months of CloudEvents into a `NoopProducer`
-and nothing failed, so "the producer returned Ok" is not evidence. Start one:
+and nothing failed, so "the producer returned Ok" is not evidence.
+
+The broker is a **standing container on the dev host**, not one you start and
+remove around a run:
 
 ```bash
-docker run -d --name doceditor-redpanda-test -p 127.0.0.1:19092:19092 \
+docker run -d --name doceditor-redpanda-dev --restart unless-stopped \
+  -p 127.0.0.1:19092:19092 \
   docker.redpanda.com/redpandadata/redpanda:v24.2.7 \
   redpanda start --smp 1 --overprovisioned --node-id 0 --check=false \
     --mode dev-container --kafka-addr PLAINTEXT://0.0.0.0:19092 \
     --advertise-kafka-addr PLAINTEXT://127.0.0.1:19092
+# ready check
+docker exec doceditor-redpanda-dev rpk cluster info --brokers 127.0.0.1:19092
 ```
 
-CI starts the same image in the `test` job and sets `REDPANDA_BROKERS`
-explicitly; the fallback in `tests/common/mod.rs` is a local convenience only.
+**Why standing, measured on 2026-09-13.** Three runners run this suite and only
+two of them bring a broker. CI starts its own per run (`.github/workflows/ci.yml`,
+`docker run`, then sets `REDPANDA_BROKERS`); a developer types the line above.
+The **ADLC pipeline** (`~/dev/ops/adlc-v2/scripts/test-runner.sh`) does neither:
+it runs `cargo test --all` on this host with no environment, and it provisions
+Postgres (`lib/db-schema-guard.sh`) but nothing for the bus. With no broker up,
+`doceditor-test.log` showed 70 green and 3 red in 15 s and the service was
+declared FAIL for an infrastructure gap, not a code one. Removing the container
+after a local run re-creates that, so it stays up — it is the same class of
+prerequisite as the `ods-postgres` container on 5435.
+
+`REDPANDA_BROKERS` overrides the address; the fallback in `tests/common/mod.rs`
+is what the pipeline and a bare `cargo test` land on, and the failure it raises
+now carries the `docker run` line itself (`tests/events_roundtrip.rs`).
 
 ## Environment Variables
 `.env.example` lists exactly what `src/config.rs` reads — keep the two in step.
