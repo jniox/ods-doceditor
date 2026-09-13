@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use actix_web::{web, App, HttpServer};
 use sqlx::postgres::PgPoolOptions;
 
 use ods_doceditor::api::extractors::JwtConfig;
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::config::AppConfig;
-use ods_doceditor::events::producer::NoopProducer;
+use ods_doceditor::events::producer::producer_from_config;
 use ods_doceditor::service::document_service::DocumentService;
 
 #[actix_web::main]
@@ -65,8 +63,9 @@ async fn main() -> std::io::Result<()> {
     // Say out loud whether the database will actually enforce the policies.
     ods_doceditor::repository::tenant_context::log_rls_posture(&pool).await;
 
-    // Event producer (NoopProducer until Redpanda is configured)
-    let producer: Arc<dyn ods_doceditor::events::producer::EventProducer> = Arc::new(NoopProducer);
+    // Event producer. A real one whenever REDPANDA_BROKERS says where to publish.
+    let producer = producer_from_config(config.redpanda_brokers.as_deref(), &config.redpanda_topic);
+    tracing::info!(producer = producer.name(), "Event producer wired");
 
     // Payload limits based on max_document_size_mb
     let max_payload_bytes = config.max_document_size_mb * 1024 * 1024;

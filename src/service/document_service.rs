@@ -83,12 +83,12 @@ impl DocumentService {
         .await?;
 
         let event = CloudEvent::document_created(tenant_id, doc.id, &doc.title, created_by);
-        let _ = self.producer.publish(event);
+        self.publish(event);
         // Version 1 is a real row; announcing it keeps version depth derivable
         // from the event stream alone, with no special case for creation.
         let event =
             CloudEvent::version_created(tenant_id, doc.id, doc.current_version, created_by, true);
-        let _ = self.producer.publish(event);
+        self.publish(event);
 
         Ok(doc)
     }
@@ -173,7 +173,7 @@ impl DocumentService {
                 user_id,
                 true,
             );
-            let _ = self.producer.publish(event);
+            self.publish(event);
         }
         if title.is_some() {
             changes.push("title");
@@ -188,7 +188,7 @@ impl DocumentService {
                     user_id,
                     doc.current_version,
                 );
-                let _ = self.producer.publish(event);
+                self.publish(event);
             }
         }
         if has_metadata {
@@ -203,7 +203,7 @@ impl DocumentService {
                 changes,
                 doc.current_version,
             );
-            let _ = self.producer.publish(event);
+            self.publish(event);
         }
 
         Ok(doc)
@@ -219,7 +219,7 @@ impl DocumentService {
         document_repo::delete_document(&self.pool, tenant_id, document_id).await?;
 
         let event = CloudEvent::document_deleted(tenant_id, document_id, deleted_by);
-        let _ = self.producer.publish(event);
+        self.publish(event);
 
         Ok(())
     }
@@ -244,7 +244,7 @@ impl DocumentService {
 
         let event =
             CloudEvent::version_created(tenant_id, document_id, version.version, created_by, false);
-        let _ = self.producer.publish(event);
+        self.publish(event);
 
         Ok(version)
     }
@@ -266,6 +266,17 @@ impl DocumentService {
         version_number: i32,
     ) -> AppResult<DocumentVersion> {
         version_repo::get_version(&self.pool, tenant_id, document_id, version_number).await
+    }
+
+    /// Publish an event, reporting a failure instead of discarding it.
+    ///
+    /// Publication is best-effort by design — an analytics event must never
+    /// fail a document write — but "best effort" and "silently ignored" are
+    /// different things, and only one of them is debuggable.
+    fn publish(&self, event: CloudEvent) {
+        if let Err(e) = self.producer.publish(event) {
+            tracing::error!("Failed to publish an editor event: {e}");
+        }
     }
 
     /// Enforce the configured body ceiling, in bytes and not characters —
