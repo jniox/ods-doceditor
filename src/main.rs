@@ -14,13 +14,21 @@ async fn main() -> std::io::Result<()> {
     // Load .env (dev convenience)
     let _ = dotenvy::dotenv();
 
-    // Tracing
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-
-    // Config
+    // Config first: the log filter is part of it.
     let config = AppConfig::from_env();
+
+    // Tracing. Structured JSON on one line per event, so Cloud Logging parses
+    // the fields (correlation id included) instead of a wall of text.
+    let filter = config.log_filter();
+    let env_filter = tracing_subscriber::EnvFilter::try_new(&filter)
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .json()
+        .flatten_event(true)
+        .with_current_span(true)
+        .with_env_filter(env_filter)
+        .init();
+    tracing::info!(filter = %filter, "Logging configured");
 
     // JWT configuration
     let jwt_config = build_jwt_config(&config);

@@ -16,7 +16,30 @@ pub struct AppConfig {
     pub jwt_audience: Option<String>,
 }
 
+/// The tracing filter to apply at startup.
+///
+/// `RUST_LOG` wins when it is set, because that is the knob an operator reaches
+/// for and overriding it would be surprising. `LOG_LEVEL` is the documented
+/// variable of this service and was, until now, parsed into `AppConfig` and
+/// then never used — setting it in Cloud Run had no effect whatsoever.
+pub fn log_filter(log_level: &str, rust_log: Option<&str>) -> String {
+    let non_empty = |v: &str| {
+        let v = v.trim();
+        (!v.is_empty()).then(|| v.to_string())
+    };
+
+    rust_log
+        .and_then(non_empty)
+        .or_else(|| non_empty(log_level))
+        .unwrap_or_else(|| "info".to_string())
+}
+
 impl AppConfig {
+    /// The filter this configuration asks for, honouring `RUST_LOG` first.
+    pub fn log_filter(&self) -> String {
+        log_filter(&self.log_level, std::env::var("RUST_LOG").ok().as_deref())
+    }
+
     pub fn from_env() -> Self {
         Self {
             database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"),
@@ -41,5 +64,31 @@ impl AppConfig {
             jwt_issuer: std::env::var("JWT_ISSUER").ok(),
             jwt_audience: std::env::var("JWT_AUDIENCE").ok(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_filter;
+
+    #[test]
+    fn rust_log_wins_when_an_operator_sets_it() {
+        assert_eq!(log_filter("warn", Some("debug")), "debug");
+        assert_eq!(
+            log_filter("warn", Some("ods_doceditor=trace")),
+            "ods_doceditor=trace"
+        );
+    }
+
+    #[test]
+    fn log_level_is_used_when_rust_log_is_absent_or_blank() {
+        assert_eq!(log_filter("warn", None), "warn");
+        assert_eq!(log_filter("debug", Some("   ")), "debug");
+    }
+
+    #[test]
+    fn the_fallback_is_info_and_never_an_empty_filter() {
+        assert_eq!(log_filter("", None), "info");
+        assert_eq!(log_filter("  ", Some("")), "info");
     }
 }

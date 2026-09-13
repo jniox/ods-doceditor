@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, staging]
+  # `pull_request: [staging]` alone meant a PR to `dev` — which is how every
+  # feature branch of this repo is merged — ran nothing at all.
   pull_request:
-    branches: [staging]
+    branches: [dev, staging]
 
 env:
   CARGO_TERM_COLOR: always
@@ -36,12 +38,63 @@ jobs:
         run: cargo fmt --check
 
       - name: Run Clippy (deny warnings)
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+  # -- API contract ---------------------------------------------------------
+  contract:
+    name: OpenAPI contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # BR-0007: the contract is published in OpenAPI 3.1 and validated in CI.
+      - name: Validate docs/openapi.yaml
+        run: |
+          pip install --quiet openapi-spec-validator pyyaml
+          python - <<'PY'
+          import yaml
+          from openapi_spec_validator import validate
+          validate(yaml.safe_load(open("docs/openapi.yaml")))
+          print("docs/openapi.yaml is a valid OpenAPI 3.1 document")
+          PY
 
   # -- Tests ----------------------------------------------------------------
   test:
     name: Test
     runs-on: ubuntu-latest
+
+    # The test job had no database at all, so the integration tests could never
+    # have passed here whatever the code did — and `cargo test` stops at the
+    # first failing target, which meant the dependency guards in
+    # tests/framework.rs were never reached either.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ods
+          POSTGRES_PASSWORD: ods-dev-2026
+          POSTGRES_DB: ods
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ods -d ods"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # search_path is pinned in the DSN: sqlx creates `_sqlx_migrations` with
+      # an unqualified CREATE TABLE before migration 001 (the one that creates
+      # the schema) runs. The harness creates the schema first for the same
+      # reason; both are required, neither is sufficient alone.
+      DATABASE_URL: "postgres://ods:ods-dev-2026@127.0.0.1:5432/ods?options=-c%20search_path%3Deditor%2Cpublic"
+      JWT_ALLOW_HS256: "true"
+      JWT_SECRET: test-secret-for-doceditor-jwt-validation-only
+
     steps:
       - uses: actions/checkout@v4
 
@@ -64,7 +117,7 @@ jobs:
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, contract, test]
     steps:
       - uses: actions/checkout@v4
 
