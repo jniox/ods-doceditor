@@ -274,6 +274,11 @@ impl DocumentService {
     /// fail a document write — but "best effort" and "silently ignored" are
     /// different things, and only one of them is debuggable.
     fn publish(&self, event: CloudEvent) {
+        // One chokepoint, so no event can be emitted without its correlation.
+        let event = match crate::correlation::current() {
+            Some(correlation_id) => event.with_correlation_id(correlation_id),
+            None => event,
+        };
         if let Err(e) = self.producer.publish(event) {
             tracing::error!("Failed to publish an editor event: {e}");
         }

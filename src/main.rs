@@ -1,7 +1,9 @@
+use actix_web::middleware::from_fn;
 use actix_web::{web, App, HttpServer};
 use sqlx::postgres::PgPoolOptions;
 
 use ods_doceditor::api::extractors::JwtConfig;
+use ods_doceditor::api::middleware::correlate;
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::config::AppConfig;
 use ods_doceditor::events::producer::producer_from_config;
@@ -79,6 +81,9 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
+            // Outermost: every request, health probes included, gets a
+            // correlation id and echoes it back.
+            .wrap(from_fn(correlate))
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(doc_service.clone()))
             .app_data(web::Data::new(jwt_config.clone()))
