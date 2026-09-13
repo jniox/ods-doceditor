@@ -72,6 +72,33 @@ paths:
                   service: { type: string, const: doceditor }
                   version: { type: string, examples: ["0.1.0"] }
 
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe (container-level alias of /health)
+      description: |
+        Identical to `/health`, kept because BR-0016 requires the image to
+        answer 200 on both paths.
+
+        **Do not probe this on a deployed instance.** Google's front end
+        intercepts `/healthz` above Cloud Run and returns its own 404 (1 568
+        bytes, no `x-cloud-trace-context` header) before the container is
+        reached, whatever nginx, IAP or the load balancer are configured to do.
+        A deployed health check must use `/health`.
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service, version]
+                properties:
+                  status: { type: string, const: ok }
+                  service: { type: string, const: doceditor }
+                  version: { type: string, examples: ["0.1.0"] }
+
   /ready:
     get:
       tags: [health]

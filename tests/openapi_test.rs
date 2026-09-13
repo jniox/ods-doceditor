@@ -13,6 +13,7 @@ const MAIN_RS: &str = include_str!("../src/main.rs");
 /// Adding a route without adding it here fails `no_undocumented_route_exists`.
 const SURFACE: &[(&str, &str)] = &[
     ("get", "/health"),
+    ("get", "/healthz"),
     ("get", "/ready"),
     ("post", "/api/v1/documents"),
     ("get", "/api/v1/documents"),
@@ -108,7 +109,7 @@ fn the_contract_states_the_authentication_rules() {
     assert!(OPENAPI.contains("bearerAuth"));
     assert!(OPENAPI.contains("bearerFormat: JWT"));
 
-    for probe in ["/health", "/ready"] {
+    for probe in ["/health", "/healthz", "/ready"] {
         let block = path_block(OPENAPI, probe).unwrap();
         assert!(
             block.contains("security: []"),

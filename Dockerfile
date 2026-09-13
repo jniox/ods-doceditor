@@ -46,7 +46,12 @@ USER doceditor
 
 EXPOSE 8087
 
+# Follows SERVER_PORT: the port is 8087 here and 8080 on Cloud Run, so a
+# hardcoded one makes the check fail exactly where it would be needed.
+# BR-0016: `/health` and not `/healthz` — the image serves both, but Google's
+# front end intercepts `/healthz` above Cloud Run, so only `/health` is usable
+# once deployed.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -sf http://localhost:8087/health || exit 1
+    CMD curl -sf "http://localhost:${SERVER_PORT:-8087}/health" || exit 1
 
 CMD ["/app/ods-doceditor"]

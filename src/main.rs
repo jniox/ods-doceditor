@@ -100,6 +100,12 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::PayloadConfig::default().limit(max_payload_bytes))
             // Health endpoints (no auth)
             .route("/health", web::get().to(health::health))
+            // BR-0016: the image must answer 200 on BOTH paths. `/healthz` is
+            // measurable on the CONTAINER only — once deployed, Google's front
+            // end intercepts it above Cloud Run and returns its own 404 before
+            // the container is ever reached. A deployed probe therefore uses
+            // `/health`, which is what ops/cloudrun/doceditor.json declares.
+            .route("/healthz", web::get().to(health::health))
             .route("/ready", web::get().to(health::ready))
             // Document CRUD
             .service(
