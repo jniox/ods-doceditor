@@ -43,6 +43,18 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("Connected to PostgreSQL (search_path = editor, public)");
 
+    // Must precede the migrations: sqlx creates `_sqlx_migrations` with an
+    // unqualified CREATE TABLE *before* running migration 001, which is the
+    // migration that creates this schema. PostgreSQL silently drops a
+    // non-existent schema from `search_path`, so on a fresh database the
+    // tracking table would land in `public` — shared with other services.
+    {
+        use sqlx::Executor;
+        pool.execute("CREATE SCHEMA IF NOT EXISTS editor")
+            .await
+            .expect("Failed to ensure the editor schema exists");
+    }
+
     // Run migrations
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -53,11 +65,12 @@ async fn main() -> std::io::Result<()> {
     // Event producer (NoopProducer until Redpanda is configured)
     let producer: Arc<dyn ods_doceditor::events::producer::EventProducer> = Arc::new(NoopProducer);
 
-    // Document service
-    let doc_service = DocumentService::new(pool.clone(), producer);
-
     // Payload limits based on max_document_size_mb
     let max_payload_bytes = config.max_document_size_mb * 1024 * 1024;
+
+    // Document service
+    let doc_service =
+        DocumentService::new(pool.clone(), producer).with_max_content_bytes(max_payload_bytes);
 
     let bind = format!("{}:{}", config.server_host, config.server_port);
     tracing::info!("Starting DocEditor on {}", bind);

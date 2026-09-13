@@ -3,12 +3,16 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::api::extractors::AuthUser;
+use crate::domain::document::DocumentUpdate;
 use crate::error::AppError;
 use crate::service::document_service::DocumentService;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateDocumentRequest {
     pub title: String,
+    /// The document body. Mutually exclusive with `template_id`.
+    pub content: Option<String>,
+    /// Start from a template's body instead of supplying one.
     pub template_id: Option<Uuid>,
     pub metadata: Option<serde_json::Value>,
 }
@@ -18,6 +22,9 @@ pub struct UpdateDocumentRequest {
     pub title: Option<String>,
     pub status: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    /// A new body. Supplying it advances the version and writes an immutable
+    /// snapshot of the previous state's successor.
+    pub content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +44,14 @@ pub async fn create_document(
     let metadata = body.metadata.clone().unwrap_or(serde_json::json!({}));
 
     let doc = svc
-        .create_document(auth.tenant_id, &body.title, auth.user_id, metadata)
+        .create_document(
+            auth.tenant_id,
+            &body.title,
+            auth.user_id,
+            metadata,
+            body.content.as_deref(),
+            body.template_id,
+        )
         .await?;
 
     Ok(HttpResponse::Created().json(doc))
@@ -95,9 +109,12 @@ pub async fn update_document(
             auth.tenant_id,
             document_id,
             auth.user_id,
-            body.title.as_deref(),
-            body.status.as_deref(),
-            body.metadata.clone(),
+            DocumentUpdate {
+                title: body.title.as_deref(),
+                status: body.status.as_deref(),
+                metadata: body.metadata.clone(),
+                content: body.content.as_deref(),
+            },
         )
         .await?;
 

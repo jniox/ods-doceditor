@@ -43,6 +43,7 @@ pub async fn create_version(
         "created_at": version.created_at,
         "created_by": version.created_by,
         "comment": version.comment,
+        "snapshot_size_bytes": version.snapshot_size_bytes,
     })))
 }
 
@@ -64,6 +65,7 @@ pub async fn list_versions(
                 "created_by": v.created_by,
                 "snapshot_size_bytes": v.snapshot_size_bytes,
                 "comment": v.comment,
+                "is_auto": v.is_auto,
             })
         })
         .collect();
@@ -91,5 +93,6 @@ pub async fn get_version(
         "snapshot_size_bytes": version.snapshot_size_bytes,
         "comment": version.comment,
         "is_auto": version.is_auto,
+        "content": version.content,
     })))
 }

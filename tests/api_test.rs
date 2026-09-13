@@ -1,59 +1,16 @@
+mod common;
+
 use actix_web::{test, web, App};
+use common::setup_test_pool;
 use ods_doceditor::api::extractors::test_helpers::{
     generate_expired_token, generate_test_token, test_jwt_config,
 };
 use ods_doceditor::api::{documents, health, versions};
+use ods_doceditor::domain::document::DocumentUpdate;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::Executor;
 use std::sync::Arc;
 use uuid::Uuid;
-
-/// Helper to create a test app with a real database connection.
-async fn setup_test_pool() -> sqlx::PgPool {
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        // search_path pinned at connection startup so `_sqlx_migrations` lands in `editor`
-        // and never in the `public` table shared with the other services of this dev DB.
-        let dsn = "postgres://ods:ods-dev-2026@127.0.0.1:5435/ods\
-                   ?options=-c%20search_path%3Deditor%2Cpublic"
-            .to_string();
-        eprintln!("DATABASE_URL absent — repli sur le DSN de dev canonique {dsn}");
-        dsn
-    });
-
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .after_connect(|conn, _meta| {
-            Box::pin(async move {
-                conn.execute("SET search_path = editor, public;")
-                    .await
-                    .map(|_| ())
-            })
-        })
-        .connect(&database_url)
-        .await
-        .expect("Failed to connect to test database");
-
-    // Drop the sqlx migration tracking for our migration source so they re-run cleanly.
-    // The migrations themselves are idempotent (IF NOT EXISTS), so this is safe.
-    pool.execute("DELETE FROM _sqlx_migrations WHERE description LIKE '%editor%' OR description LIKE '%create_schema%' OR description LIKE '%create_documents%' OR description LIKE '%create_document_versions%' OR description LIKE '%create_templates%' OR description LIKE '%enable_rls%'")
-        .await
-        .ok(); // Ignore error if _sqlx_migrations doesn't exist yet
-
-    // Run migrations (idempotent)
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("Failed to run migrations");
-
-    // Disable RLS for test user (ods is superuser, but just to be safe)
-    pool.execute("SET app.tenant_id = '00000000-0000-0000-0000-000000000000'")
-        .await
-        .ok();
-
-    pool
-}
 
 /// AC-020: Health endpoint returns 200 with status ok.
 #[actix_web::test]
@@ -111,10 +68,16 @@ async fn test_create_document() {
     assert_eq!(body["tenant_id"], tenant_id.to_string());
     assert_eq!(body["created_by"], user_id.to_string());
 
-    // Verify event was emitted
+    // Verify events were emitted: the document, and the version 1 it starts with.
     let events = producer.get_events();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].event_type, "com.ods.editor.document.created");
+    let types: Vec<&str> = events.iter().map(|e| e.event_type.as_str()).collect();
+    assert_eq!(
+        types,
+        vec![
+            "com.ods.editor.document.created",
+            "com.ods.editor.version.created"
+        ]
+    );
 }
 
 /// AC-001: Reject document creation with empty title (BR-001).
@@ -166,14 +129,28 @@ async fn test_list_documents_tenant_isolation() {
     let user_id = Uuid::new_v4();
 
     // Create doc for tenant A
-    svc.create_document(tenant_a, "Doc A", user_id, serde_json::json!({}))
-        .await
-        .unwrap();
+    svc.create_document(
+        tenant_a,
+        "Doc A",
+        user_id,
+        serde_json::json!({}),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Create doc for tenant B
-    svc.create_document(tenant_b, "Doc B", user_id, serde_json::json!({}))
-        .await
-        .unwrap();
+    svc.create_document(
+        tenant_b,
+        "Doc B",
+        user_id,
+        serde_json::json!({}),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     let app = test::init_service(
         App::new()
@@ -216,7 +193,14 @@ async fn test_update_document_status_draft_to_published() {
     let token = generate_test_token(user_id, tenant_id);
 
     let doc = svc
-        .create_document(tenant_id, "To Publish", user_id, serde_json::json!({}))
+        .create_document(
+            tenant_id,
+            "To Publish",
+            user_id,
+            serde_json::json!({}),
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -267,12 +251,27 @@ async fn test_update_document_invalid_status_transition() {
 
     // Create and publish
     let doc = svc
-        .create_document(tenant_id, "Published Doc", user_id, serde_json::json!({}))
+        .create_document(
+            tenant_id,
+            "Published Doc",
+            user_id,
+            serde_json::json!({}),
+            None,
+            None,
+        )
         .await
         .unwrap();
-    svc.update_document(tenant_id, doc.id, user_id, None, Some("published"), None)
-        .await
-        .unwrap();
+    svc.update_document(
+        tenant_id,
+        doc.id,
+        user_id,
+        DocumentUpdate {
+            status: Some("published"),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
 
     let app = test::init_service(
         App::new()
@@ -310,7 +309,14 @@ async fn test_delete_document_soft_delete() {
     let token = generate_test_token(user_id, tenant_id);
 
     let doc = svc
-        .create_document(tenant_id, "To Delete", user_id, serde_json::json!({}))
+        .create_document(
+            tenant_id,
+            "To Delete",
+            user_id,
+            serde_json::json!({}),
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -371,7 +377,14 @@ async fn test_create_and_list_versions() {
     let token = generate_test_token(user_id, tenant_id);
 
     let doc = svc
-        .create_document(tenant_id, "Versioned Doc", user_id, serde_json::json!({}))
+        .create_document(
+            tenant_id,
+            "Versioned Doc",
+            user_id,
+            serde_json::json!({}),
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -402,7 +415,8 @@ async fn test_create_and_list_versions() {
     assert_eq!(resp.status(), 201);
 
     let body: serde_json::Value = test::read_body_json(resp).await;
-    assert_eq!(body["version"], 2); // starts at 1, first explicit version is 2
+    // Version 1 is written at creation, so the first explicit snapshot is 2.
+    assert_eq!(body["version"], 2);
     assert_eq!(body["comment"], "First save");
 
     // List versions
@@ -416,7 +430,13 @@ async fn test_create_and_list_versions() {
 
     let body: serde_json::Value = test::read_body_json(resp).await;
     let versions = body["versions"].as_array().unwrap();
-    assert_eq!(versions.len(), 1);
+    assert_eq!(
+        versions.len(),
+        2,
+        "version 1 (creation) + version 2 (snapshot)"
+    );
+    assert_eq!(versions[0]["version"], 2, "most recent first");
+    assert_eq!(versions[1]["version"], 1);
 }
 
 /// Test: unauthenticated request returns 401 (no Authorization header).
