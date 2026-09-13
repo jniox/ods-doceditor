@@ -36,8 +36,6 @@ dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2"
-anyhow = "1"
-validator = { version = "0.19", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 regex-lite = "0.1"
 
@@ -47,6 +45,10 @@ test-helpers = []
 
 [dev-dependencies]
 ods-doceditor = { path = ".", features = ["test-helpers"] }
+# `reqwest` is kept deliberately even though only the guards reference it: it is
+# the sole remaining path by which `h2` appears in Cargo.lock, and the guards in
+# tests/framework.rs are written around that fact (HR-20260909-001). Removing it
+# would silently change what those guards are guarding.
 # Same reason as the entry in [dependencies], and it is not redundant: this
 # repository declares actix-web twice, and a dev-dependency taking the default
 # set is enough to keep h2 0.3 in Cargo.lock -- which is the file cargo audit
@@ -55,5 +57,3 @@ ods-doceditor = { path = ".", features = ["test-helpers"] }
 # selected above, minus http2.
 actix-web = { version = "4", default-features = false, features = ["macros"] }
 reqwest = { version = "0.12", features = ["json"] }
-claim = "0.5"
-fake = { version = "3", features = ["derive", "uuid", "chrono"] }
