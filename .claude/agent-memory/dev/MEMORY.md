@@ -1,0 +1,4 @@
+- [h2 advisory campaign](project_h2_advisory_campaign.md) — HR-20260909-001: already delivered here, why the unit keeps re-opening, and the runbook premises that were false
+- [Test database](project_test_database.md) — the 5435 fallback, why `editor` must pre-exist, the shared-instance name collisions, and what CI now provides
+- [Batch 2026-09-13](project_doceditor_batch_20260913.md) — the BA FAIL closure, and the two questions left to HR-20260913-001 (no spec.md, three topic names)
+- [Scope of an order](feedback_scoped_mechanical_fix.md) — when an order names one file stay in it; when it says "fix the BA report" it does not — and the idle-watchdog's `wip:` commit
