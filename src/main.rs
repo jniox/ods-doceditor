@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use actix_web::{App, HttpServer, web};
+use actix_web::{web, App, HttpServer};
 use sqlx::postgres::PgPoolOptions;
 
 use ods_doceditor::api::extractors::JwtConfig;
@@ -51,8 +51,7 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Database migrations applied");
 
     // Event producer (NoopProducer until Redpanda is configured)
-    let producer: Arc<dyn ods_doceditor::events::producer::EventProducer> =
-        Arc::new(NoopProducer);
+    let producer: Arc<dyn ods_doceditor::events::producer::EventProducer> = Arc::new(NoopProducer);
 
     // Document service
     let doc_service = DocumentService::new(pool.clone(), producer);
@@ -80,12 +79,27 @@ async fn main() -> std::io::Result<()> {
                     .route("/documents", web::post().to(documents::create_document))
                     .route("/documents", web::get().to(documents::list_documents))
                     .route("/documents/{id}", web::get().to(documents::get_document))
-                    .route("/documents/{id}", web::patch().to(documents::update_document))
-                    .route("/documents/{id}", web::delete().to(documents::delete_document))
+                    .route(
+                        "/documents/{id}",
+                        web::patch().to(documents::update_document),
+                    )
+                    .route(
+                        "/documents/{id}",
+                        web::delete().to(documents::delete_document),
+                    )
                     // Versions
-                    .route("/documents/{id}/versions", web::post().to(versions::create_version))
-                    .route("/documents/{id}/versions", web::get().to(versions::list_versions))
-                    .route("/documents/{doc_id}/versions/{version}", web::get().to(versions::get_version)),
+                    .route(
+                        "/documents/{id}/versions",
+                        web::post().to(versions::create_version),
+                    )
+                    .route(
+                        "/documents/{id}/versions",
+                        web::get().to(versions::list_versions),
+                    )
+                    .route(
+                        "/documents/{doc_id}/versions/{version}",
+                        web::get().to(versions::get_version),
+                    ),
             )
     })
     .bind(&bind)?

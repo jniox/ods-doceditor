@@ -37,14 +37,9 @@ impl DocumentService {
         // BR-029: validate metadata keys
         Self::validate_metadata(&metadata)?;
 
-        let doc = document_repo::create_document(
-            &self.pool,
-            tenant_id,
-            trimmed,
-            created_by,
-            metadata,
-        )
-        .await?;
+        let doc =
+            document_repo::create_document(&self.pool, tenant_id, trimmed, created_by, metadata)
+                .await?;
 
         // Emit event
         let event = CloudEvent::document_created(tenant_id, doc.id, &doc.title, created_by);
@@ -68,11 +63,7 @@ impl DocumentService {
     }
 
     /// Get a single document.
-    pub async fn get_document(
-        &self,
-        tenant_id: Uuid,
-        document_id: Uuid,
-    ) -> AppResult<Document> {
+    pub async fn get_document(&self, tenant_id: Uuid, document_id: Uuid) -> AppResult<Document> {
         document_repo::get_document(&self.pool, tenant_id, document_id).await
     }
 
@@ -104,7 +95,12 @@ impl DocumentService {
         let has_metadata = metadata.is_some();
 
         let doc = document_repo::update_document(
-            &self.pool, tenant_id, document_id, title, status, metadata,
+            &self.pool,
+            tenant_id,
+            document_id,
+            title,
+            status,
+            metadata,
         )
         .await?;
 
@@ -177,13 +173,8 @@ impl DocumentService {
         )
         .await?;
 
-        let event = CloudEvent::version_created(
-            tenant_id,
-            document_id,
-            version.version,
-            created_by,
-            false,
-        );
+        let event =
+            CloudEvent::version_created(tenant_id, document_id, version.version, created_by, false);
         let _ = self.producer.publish(event);
 
         Ok(version)

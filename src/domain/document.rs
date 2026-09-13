@@ -97,8 +97,14 @@ mod tests {
     #[test]
     fn test_status_from_str() {
         assert_eq!(DocumentStatus::parse("draft"), Some(DocumentStatus::Draft));
-        assert_eq!(DocumentStatus::parse("published"), Some(DocumentStatus::Published));
-        assert_eq!(DocumentStatus::parse("archived"), Some(DocumentStatus::Archived));
+        assert_eq!(
+            DocumentStatus::parse("published"),
+            Some(DocumentStatus::Published)
+        );
+        assert_eq!(
+            DocumentStatus::parse("archived"),
+            Some(DocumentStatus::Archived)
+        );
         assert_eq!(DocumentStatus::parse("unknown"), None);
     }
 }

@@ -28,7 +28,9 @@ pub async fn create_document(
     .fetch_one(&mut *tx)
     .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok(doc)
 }
 
@@ -45,7 +47,8 @@ pub async fn list_documents(
     let offset = (page - 1) * per_page;
 
     // Base WHERE always includes tenant_id (defense-in-depth, not just RLS)
-    let base_count = "SELECT COUNT(*)::bigint FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL";
+    let base_count =
+        "SELECT COUNT(*)::bigint FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL";
     let base_rows = "SELECT id, tenant_id, title, status, created_by, created_at, updated_at, deleted_at, current_version, word_count, metadata FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL";
 
     // Build dynamic query for count (no ORDER BY, no LIMIT/OFFSET)
@@ -80,7 +83,9 @@ pub async fn list_documents(
         q.fetch_all(&mut *tx).await?
     };
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok((docs, total.0))
 }
 
@@ -137,7 +142,9 @@ pub async fn get_document(
     .fetch_optional(&mut *tx)
     .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     doc.ok_or_else(|| AppError::NotFound("Document not found".to_string()))
 }
 
@@ -202,17 +209,15 @@ pub async fn update_document(
     .fetch_one(&mut *tx)
     .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok(doc)
 }
 
 /// Soft-delete a document.
 /// Defense-in-depth: filters by both id AND tenant_id.
-pub async fn delete_document(
-    pool: &PgPool,
-    tenant_id: Uuid,
-    document_id: Uuid,
-) -> AppResult<()> {
+pub async fn delete_document(pool: &PgPool, tenant_id: Uuid, document_id: Uuid) -> AppResult<()> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
     let result = sqlx::query(
@@ -229,6 +234,8 @@ pub async fn delete_document(
         return Err(AppError::NotFound("Document not found".to_string()));
     }
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok(())
 }

@@ -1,5 +1,7 @@
 use actix_web::{test, web, App};
-use ods_doceditor::api::extractors::test_helpers::{generate_test_token, generate_expired_token, test_jwt_config};
+use ods_doceditor::api::extractors::test_helpers::{
+    generate_expired_token, generate_test_token, test_jwt_config,
+};
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
@@ -56,10 +58,7 @@ async fn setup_test_pool() -> sqlx::PgPool {
 /// AC-020: Health endpoint returns 200 with status ok.
 #[actix_web::test]
 async fn test_health_endpoint() {
-    let app = test::init_service(
-        App::new().route("/health", web::get().to(health::health)),
-    )
-    .await;
+    let app = test::init_service(App::new().route("/health", web::get().to(health::health))).await;
 
     let req = test::TestRequest::get().uri("/health").to_request();
     let resp = test::call_service(&app, req).await;
@@ -87,7 +86,10 @@ async fn test_create_document() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents", web::post().to(documents::create_document)),
+            .route(
+                "/api/v1/documents",
+                web::post().to(documents::create_document),
+            ),
     )
     .await;
 
@@ -132,7 +134,10 @@ async fn test_create_document_empty_title_rejected() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents", web::post().to(documents::create_document)),
+            .route(
+                "/api/v1/documents",
+                web::post().to(documents::create_document),
+            ),
     )
     .await;
 
@@ -175,7 +180,10 @@ async fn test_list_documents_tenant_isolation() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents", web::get().to(documents::list_documents)),
+            .route(
+                "/api/v1/documents",
+                web::get().to(documents::list_documents),
+            ),
     )
     .await;
 
@@ -217,7 +225,10 @@ async fn test_update_document_status_draft_to_published() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents/{id}", web::patch().to(documents::update_document)),
+            .route(
+                "/api/v1/documents/{id}",
+                web::patch().to(documents::update_document),
+            ),
     )
     .await;
 
@@ -268,7 +279,10 @@ async fn test_update_document_invalid_status_transition() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents/{id}", web::patch().to(documents::update_document)),
+            .route(
+                "/api/v1/documents/{id}",
+                web::patch().to(documents::update_document),
+            ),
     )
     .await;
 
@@ -305,8 +319,14 @@ async fn test_delete_document_soft_delete() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc.clone()))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents/{id}", web::delete().to(documents::delete_document))
-            .route("/api/v1/documents", web::get().to(documents::list_documents)),
+            .route(
+                "/api/v1/documents/{id}",
+                web::delete().to(documents::delete_document),
+            )
+            .route(
+                "/api/v1/documents",
+                web::get().to(documents::list_documents),
+            ),
     )
     .await;
 
@@ -360,8 +380,14 @@ async fn test_create_and_list_versions() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents/{id}/versions", web::post().to(versions::create_version))
-            .route("/api/v1/documents/{id}/versions", web::get().to(versions::list_versions)),
+            .route(
+                "/api/v1/documents/{id}/versions",
+                web::post().to(versions::create_version),
+            )
+            .route(
+                "/api/v1/documents/{id}/versions",
+                web::get().to(versions::list_versions),
+            ),
     )
     .await;
 
@@ -406,7 +432,10 @@ async fn test_unauthenticated_request() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents", web::get().to(documents::list_documents)),
+            .route(
+                "/api/v1/documents",
+                web::get().to(documents::list_documents),
+            ),
     )
     .await;
 
@@ -436,7 +465,10 @@ async fn test_expired_token_rejected() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents", web::get().to(documents::list_documents)),
+            .route(
+                "/api/v1/documents",
+                web::get().to(documents::list_documents),
+            ),
     )
     .await;
 
@@ -462,7 +494,10 @@ async fn test_invalid_token_rejected() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents", web::get().to(documents::list_documents)),
+            .route(
+                "/api/v1/documents",
+                web::get().to(documents::list_documents),
+            ),
     )
     .await;
 
@@ -492,7 +527,10 @@ async fn test_invalid_metadata_key_rejected() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
-            .route("/api/v1/documents", web::post().to(documents::create_document)),
+            .route(
+                "/api/v1/documents",
+                web::post().to(documents::create_document),
+            ),
     )
     .await;
 

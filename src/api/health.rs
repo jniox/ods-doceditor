@@ -1,4 +1,4 @@
-use actix_web::{HttpResponse, web};
+use actix_web::{web, HttpResponse};
 use sqlx::PgPool;
 
 /// GET /health — liveness probe (AC-020).

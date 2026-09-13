@@ -59,7 +59,9 @@ pub async fn create_version(
         .execute(&mut *tx)
         .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok(version)
 }
 
@@ -96,7 +98,9 @@ pub async fn list_versions(
     .fetch_all(&mut *tx)
     .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok(versions)
 }
 
@@ -121,6 +125,8 @@ pub async fn get_version(
     .fetch_optional(&mut *tx)
     .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     version.ok_or_else(|| AppError::NotFound("Version not found".to_string()))
 }

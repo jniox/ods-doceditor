@@ -29,24 +29,18 @@ pub type AppResult<T> = Result<T, AppError>;
 impl ResponseError for AppError {
     fn error_response(&self) -> HttpResponse {
         match self {
-            AppError::Validation(msg) => HttpResponse::UnprocessableEntity().json(
-                serde_json::json!({"error": "validation_error", "message": msg}),
-            ),
-            AppError::NotFound(msg) => HttpResponse::NotFound().json(
-                serde_json::json!({"error": "not_found", "message": msg}),
-            ),
-            AppError::Conflict(msg) => HttpResponse::Conflict().json(
-                serde_json::json!({"error": "conflict", "message": msg}),
-            ),
-            AppError::Unauthorized(msg) => HttpResponse::Unauthorized().json(
-                serde_json::json!({"error": "unauthorized", "message": msg}),
-            ),
-            AppError::Forbidden(msg) => HttpResponse::Forbidden().json(
-                serde_json::json!({"error": "forbidden", "message": msg}),
-            ),
-            AppError::BadRequest(msg) => HttpResponse::BadRequest().json(
-                serde_json::json!({"error": "bad_request", "message": msg}),
-            ),
+            AppError::Validation(msg) => HttpResponse::UnprocessableEntity()
+                .json(serde_json::json!({"error": "validation_error", "message": msg})),
+            AppError::NotFound(msg) => HttpResponse::NotFound()
+                .json(serde_json::json!({"error": "not_found", "message": msg})),
+            AppError::Conflict(msg) => HttpResponse::Conflict()
+                .json(serde_json::json!({"error": "conflict", "message": msg})),
+            AppError::Unauthorized(msg) => HttpResponse::Unauthorized()
+                .json(serde_json::json!({"error": "unauthorized", "message": msg})),
+            AppError::Forbidden(msg) => HttpResponse::Forbidden()
+                .json(serde_json::json!({"error": "forbidden", "message": msg})),
+            AppError::BadRequest(msg) => HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": "bad_request", "message": msg})),
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
                 HttpResponse::InternalServerError().json(
