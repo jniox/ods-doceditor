@@ -48,6 +48,31 @@ use uuid::Uuid;
 /// because `message.timeout.ms` is 10s on the producer side.
 const READ_DEADLINE: Duration = Duration::from_secs(30);
 
+/// The single command that makes this file runnable on a machine that has no
+/// broker — and the one the ADLC pipeline's host was missing on 2026-09-13.
+///
+/// It is `--restart unless-stopped` and not a throwaway container on purpose:
+/// unlike CI, which starts its own broker per run (`.github/workflows/ci.yml`),
+/// the pipeline runs `cargo test --all` on a long-lived host with no
+/// environment of its own. A broker removed after a local run leaves the suite
+/// red there, for an infrastructure reason that reads like a code regression.
+const START_A_BROKER: &str = concat!(
+    "docker run -d --name doceditor-redpanda-dev --restart unless-stopped ",
+    "-p 127.0.0.1:19092:19092 docker.redpanda.com/redpandadata/redpanda:v24.2.7 ",
+    "redpanda start --smp 1 --overprovisioned --node-id 0 --check=false --mode dev-container ",
+    "--kafka-addr PLAINTEXT://0.0.0.0:19092 --advertise-kafka-addr PLAINTEXT://127.0.0.1:19092",
+);
+
+/// The whole diagnosis in one line: what was unreachable, what it refused, that
+/// this is not a test that skips, and how to make it runnable.
+fn unreachable_broker(brokers: &str, topic: &str, error: &str) -> String {
+    format!(
+        "could not reach the broker at {brokers} to create {topic}: {error}. \
+         This test does not skip without a broker — see tests/common/mod.rs and ADR-002. \
+         Start one and re-run: {START_A_BROKER}"
+    )
+}
+
 /// A topic per test run, so two runs (or two CI jobs) never read each other's
 /// messages and a leftover message can never make an assertion pass.
 fn unique_topic(label: &str) -> String {
@@ -70,16 +95,53 @@ async fn create_topic(brokers: &str, topic: &str) {
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(15))),
         )
         .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "could not reach the broker at {brokers} to create {topic}: {e}. \
-                 This test does not skip without a broker — see tests/common/mod.rs."
-            )
-        });
+        .unwrap_or_else(|e| panic!("{}", unreachable_broker(brokers, topic, &e.to_string())));
 
     for result in results {
         result.unwrap_or_else(|(name, e)| panic!("broker refused to create {name}: {e}"));
     }
+}
+
+/// What a machine without a broker is told, and what it can do about it.
+///
+/// The message ends up in `~/dev/ops/outputs/doceditor-test.log`, which is the
+/// only thing the pipeline's triage reads. On 2026-09-13 it named the address
+/// and pointed at `tests/common/mod.rs`, which cost a whole dev turn to open
+/// and re-derive the one command below. So the command travels *with* the
+/// failure.
+#[test]
+fn the_unreachable_broker_message_hands_the_reader_the_remedy() {
+    let message = unreachable_broker(
+        "127.0.0.1:19092",
+        "doceditor-roundtrip-created-42",
+        "Admin operation error: OperationTimedOut",
+    );
+
+    for needle in [
+        "127.0.0.1:19092",
+        "doceditor-roundtrip-created-42",
+        "OperationTimedOut",
+        "does not skip",
+        "docker run",
+        "redpandadata/redpanda",
+    ] {
+        assert!(
+            message.contains(needle),
+            "the failure a triage will read does not mention {needle:?}: {message}"
+        );
+    }
+
+    // The remedy must start a broker at the address the harness actually dials
+    // when `REDPANDA_BROKERS` is unset. A command that advertises another port
+    // reads as help and leaves the suite just as red.
+    assert!(
+        START_A_BROKER.contains(&format!(
+            "--advertise-kafka-addr PLAINTEXT://{}",
+            common::FALLBACK_BROKERS
+        )),
+        "the suggested command does not advertise {}: {START_A_BROKER}",
+        common::FALLBACK_BROKERS
+    );
 }
 
 /// One message, flattened into the three things a consumer routes on.

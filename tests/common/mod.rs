@@ -98,7 +98,7 @@ pub async fn insert_template(
 /// else's broker, which would make its assertions depend on another project's
 /// retention settings. CI sets `REDPANDA_BROKERS` explicitly and therefore
 /// never relies on this constant.
-const FALLBACK_BROKERS: &str = "127.0.0.1:19092";
+pub const FALLBACK_BROKERS: &str = "127.0.0.1:19092";
 
 /// Where the event round-trip test publishes.
 ///
