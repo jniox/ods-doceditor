@@ -40,9 +40,7 @@ fn declared_variants() -> Vec<String> {
     body.lines()
         .map(str::trim)
         // Skip doc comments, attributes such as #[error("...")], and blanks.
-        .filter(|line| {
-            !line.is_empty() && !line.starts_with('#') && !line.starts_with("//")
-        })
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("//"))
         .filter_map(|line| {
             let name = line
                 .split(['(', '{', ','])

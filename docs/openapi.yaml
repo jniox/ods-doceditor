@@ -464,6 +464,11 @@ components:
             The document body — HTML, Markdown or JSON, as the calling product
             prefers; DocEditor stores it verbatim. Bounded by
             `MAX_DOCUMENT_SIZE_MB`. Mutually exclusive with `template_id`.
+
+            Stored verbatim means exactly that: the body is neither parsed,
+            sanitised nor escaped by this service, and it is returned as it was
+            sent. A product that renders it as HTML owns that boundary and must
+            sanitise on its side. See ADR-001.
         template_id:
           type: [string, "null"]
           format: uuid
