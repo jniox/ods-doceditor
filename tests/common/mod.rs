@@ -90,3 +90,33 @@ pub async fn insert_template(
     .await
     .expect("Failed to insert test template")
 }
+
+/// Canonical local Redpanda address, used when `REDPANDA_BROKERS` is absent.
+///
+/// 19092 rather than the conventional 9092: this host runs a dozen services'
+/// containers and the round-trip test must not silently attach to somebody
+/// else's broker, which would make its assertions depend on another project's
+/// retention settings. CI sets `REDPANDA_BROKERS` explicitly and therefore
+/// never relies on this constant.
+const FALLBACK_BROKERS: &str = "127.0.0.1:19092";
+
+/// Where the event round-trip test publishes.
+///
+/// There is deliberately **no skip path**. A broker-less environment makes the
+/// test fail, loudly, rather than pass by inspecting nothing: this service
+/// shipped four months of CloudEvents into a `NoopProducer` precisely because
+/// nothing ever asserted that a real broker received one. See ADR-002 and the
+/// GTM brief's known limitation #2.
+pub fn broker_addr() -> String {
+    std::env::var("REDPANDA_BROKERS")
+        .ok()
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| {
+            eprintln!(
+                "REDPANDA_BROKERS absent — repli sur le courtier de dev canonique \
+                 {FALLBACK_BROKERS} (docker run … redpandadata/redpanda)"
+            );
+            FALLBACK_BROKERS.to_string()
+        })
+}

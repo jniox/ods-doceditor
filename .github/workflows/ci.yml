@@ -102,9 +102,35 @@ jobs:
       DATABASE_URL: "postgres://ods:ods-dev-2026@127.0.0.1:5432/ods?options=-c%20search_path%3Deditor%2Cpublic"
       JWT_ALLOW_HS256: "true"
       JWT_SECRET: test-secret-for-doceditor-jwt-validation-only
+      # tests/events_roundtrip.rs publishes here and reads back. It has no skip
+      # path: without a broker the job fails rather than quietly proving
+      # nothing, which is the whole point of the file.
+      REDPANDA_BROKERS: "127.0.0.1:19092"
 
     steps:
       - uses: actions/checkout@v4
+
+      # Not a `services:` container: GitHub Actions offers no way to pass a
+      # command to one, and `redpanda start` needs its listener flags. Started
+      # before the build so it is warm by the time cargo reaches the tests.
+      - name: Start a Redpanda broker
+        run: |
+          docker run -d --name redpanda -p 127.0.0.1:19092:19092 \
+            docker.redpanda.com/redpandadata/redpanda:v24.2.7 \
+            redpanda start --smp 1 --overprovisioned --node-id 0 --check=false \
+              --mode dev-container \
+              --kafka-addr PLAINTEXT://0.0.0.0:19092 \
+              --advertise-kafka-addr PLAINTEXT://127.0.0.1:19092
+          for i in $(seq 1 60); do
+            if docker exec redpanda rpk cluster info --brokers 127.0.0.1:19092 >/dev/null 2>&1; then
+              echo "Redpanda ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Redpanda never became ready:"
+          docker logs redpanda
+          exit 1
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
