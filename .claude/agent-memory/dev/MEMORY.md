@@ -12,5 +12,6 @@
 - [Batch 2026-09-14 lot 13](project_doceditor_batch_20260914_lot13.md) — a teardown that only ran on the happy path, and a bound that lived in prose while the page multiplied it by a hundred
 - [Batch 2026-09-14 lot 14](project_doceditor_batch_20260914_lot14.md) — two human decisions taken, dispatched and never executed; a ceiling sized against the platform's own default concurrency
 - [Batch 2026-09-14 lot 15](project_doceditor_batch_20260914_lot15.md) — the query string was the last unparsed input: seven answers outside the contract, and a suite that made the fix smaller
+- [Batch 2026-09-14 lot 16](project_doceditor_batch_20260914_lot16.md) — the second decision in two batches taken but never routed; the deployment had chosen a transport in May and the code never learned
 - ["Operational, not code"](feedback_operational_not_code.md) — a premise to measure, not a category to file under: what the process itself can do about the condition
 - [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — eleven cycles running: what to do with the turn, the eleven places the defects have actually been, and measuring a hypothesis before coding it

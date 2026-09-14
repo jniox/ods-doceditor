@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has little or nothing code-actionable — eleven turns running on doceditor — what to do with the turn, the eleven places the real defects have actually been, and the duty to measure a hypothesis before coding it
+description: When a BA report has little or nothing code-actionable — twelve turns running on doceditor — what to do with the turn, the twelve places the real defects have actually been, and the duty to measure a hypothesis (and a decision's premise) before coding it
 metadata:
   type: feedback
 ---
@@ -16,7 +16,7 @@ this order:
    divergence BR-0002 exists to prevent.
 2. **Then go find a defect yourself, by reading a path rather than a report.**
 
-**Why:** measured eleven turns running on doceditor (lots 5 to 15 —
+**Why:** measured twelve turns running on doceditor (lots 5 to 16 —
 2026-09-13/14). Each report said, in substance, *"no dev cycle needed on the
 code"*. Each turn found something real, and none of it was subtle once looked at:
 
@@ -150,7 +150,29 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   never learned. That is decision-grade information, so it went to a human
   review (HR-20260914-007) instead of a fourth cycle of the same paragraph.
 
-**How to apply.** These eleven are a checklist, not anecdotes: concurrency on the
+- **lot 16 — the decision the report cited, taken and unrouted, for the second
+  time in two batches.** Twelfth report with nothing code-actionable; it
+  described HR-20260914-007 as `PENDING` and "not fixable by a doceditor dev
+  cycle alone". Read as JSON forty minutes later: `status: DISPATCHED`,
+  `resolution.by: it@orbusdigital.com`, `options[0].enactor: "dev"`, and
+  `enactError: "verbe inconnu : doceditor transport A"` — **the same dispatcher
+  failure as lot 14's `doceditor sizing A`**. Two instances make it a rule: the
+  BA report's paraphrase is precisely the level at which taken-but-unrouted and
+  pending look identical. The defect underneath was the same class as lot 8's
+  two layers: the *deployment* had carried `EVENT_BUS=pubsub` and three other
+  variables since May 2026 and **no line of `src/config.rs` read any of them**,
+  so the no-op producer was chosen and four months of events went nowhere in
+  silence. Two further halves worth keeping. First, **measure the premise of
+  the option you are about to enact**, not just the defect: option A was
+  recommended as "no infrastructure change", and the thing that made that true —
+  `roles/pubsub.publisher` already granted to the runtime service account — is
+  deducible from **no file in the repository**; three `gcloud` calls, five
+  minutes. Second, **when the repair adds a dependency, re-measure the estate
+  rule it could break**: an HTTP client is exactly how `h2` comes back, so
+  `cargo tree -e normal` was read again after the change (675 crates, h2 in
+  none) instead of assumed.
+
+**How to apply.** These twelve are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
@@ -158,8 +180,9 @@ whose unit (bytes/characters) differs from the unit its contract and its column
 count in, and a **constraint that lives outside the application code entirely**
 — an index expression, a column type, a trigger — refusing what the code
 happily accepts, a rule whose check is silent about every shape of input it
-was not written for, and **an input the boundary never parsed at all, whose
-refusals are therefore written by the framework**. Also
+was not written for, **an input the boundary never parsed at all, whose
+refusals are therefore written by the framework**, and **a decision the report
+calls pending that the JSON says was taken and never routed**. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
