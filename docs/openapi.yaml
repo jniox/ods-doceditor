@@ -593,12 +593,29 @@ components:
     Metadata:
       type: object
       description: |
-        At most 20 keys. Keys match `^[a-z][a-z0-9_]{0,63}$`; string values are
-        at most 256 **characters** — counted as characters and not as bytes, so
-        the bound does not move with the alphabet.
+        At most 20 keys, and at most 32 KiB once serialised. Keys match
+        `^[a-z][a-z0-9_]{0,63}$`; string values are at most 256 **characters** —
+        counted as characters and not as bytes, so the bound does not move with
+        the alphabet.
 
-        `type: object` is enforced, and not merely declared: every rule above is
-        stated about keys, so a string, a number, a boolean or an array would
+        Both bounds are enforced at **every depth**, and neither is redundant.
+        The character bound holds whatever container a string sits in: a value
+        of the object, a value nested inside one, an element of an array. Until
+        2026-09-14 it was applied to the object's own values only, so wrapping
+        the same string in `{}` or `[]` stored five megabytes in a field whose
+        documented maximum is 256 characters. The size bound holds whatever
+        shape the value takes, which is what the character bound cannot see: an
+        array of a million admissible strings breaks no per-value rule.
+
+        The size bound is not a new product limit. It is the allowance the
+        payload ceiling is already computed from (`2 x MAX_DOCUMENT_SIZE_MB +
+        64 KiB`, where the 64 KiB covers the title, this field and the
+        punctuation around them), and it matters because `DocumentSummary`
+        carries `metadata` while deliberately dropping `content`: a page
+        multiplies this field by up to 100. See ADR-008.
+
+        `type: object` is enforced, and not merely declared: every per-key rule
+        is stated about keys, so a string, a number, a boolean or an array would
         satisfy all of them vacuously. Any of those is a `422`.
       maxProperties: 20
       additionalProperties: true

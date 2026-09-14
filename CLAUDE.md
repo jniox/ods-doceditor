@@ -14,7 +14,7 @@ ods-platform
 ## Architecture
 - Domain models: `src/domain/` (Document, DocumentVersion, DocumentStatus, and the
   parsed values the boundary builds: `pagination::Pagination`, `text::Title`,
-  `text::Comment`)
+  `text::Comment`, `metadata::Metadata`)
 - Service layer: `src/service/` (DocumentService — business logic, orchestrates repo + events)
 - API handlers: `src/api/` (HTTP handlers, auth extractor, health)
 - Repository: `src/repository/` (PostgreSQL via sqlx, RLS via tenant_context)
@@ -71,6 +71,34 @@ empty page — the one reply that is both wrong and plausible, since it reads as
 "you own no documents"; it is a `400` now, as `PATCH` always was for the same
 word. Both have the same shape: **a check that says nothing about the inputs it
 was not shaped for is not a check.** See `tests/list_contract_test.rs`.
+
+**And the third one, which had the same shape one level down.** The rule
+`metadata` string values are at most 256 characters was applied with
+`if let Some(s) = value.as_str()` — a statement about the values of the object
+and about nothing else, so the *container* decided whether the rule existed:
+measured on the running binary, `{"resume": 257 × 'a'}` was a `422` and
+`{"resume": {"inner": 5 000 000 × 'a'}}` a `201`. Nothing bounded the object as a
+whole either, so the only ceiling left was the payload one — 20 MiB — which is
+itself *derived* from an allowance documented as covering "the largest envelope
+this service's own validation admits … under 7 KiB". The premise was false by a
+factor of three hundred, and the unit test guarding it restated the prose of the
+rules and compared it to itself.
+
+What that cost is not a refused request. `DocumentSummary` drops `content` on
+purpose and **keeps `metadata`**, so a page multiplies it by up to a hundred:
+thirty documents of 10 MB of metadata — thirty ordinary `201`s — answered
+`GET /documents?per_page=30` with **300 010 939 bytes and a peak RSS of 945 MiB**
+against the deployment's 512 MiB, i.e. an OOM kill of the instance, the same
+ending as the version history above and through the one column that read kept.
+Now: `domain::metadata::Metadata` is parsed at the boundary, the character bound
+holds **at every depth**, and `MAX_METADATA_BYTES` (32 KiB) bounds the serialised
+object. The two are not redundant — an array of a million admissible strings
+breaks no per-value rule, one 5 000-character string breaks no size rule — and
+32 KiB is *derived*: half of `ENVELOPE_ALLOWANCE_BYTES`, the number the payload
+ceiling was already computed from. `payload.rs`'s test now reads the constants
+the domain enforces, so the two cannot drift apart again. The worst page a caller
+can build is `per_page × 32 KiB`: measured at 100 documents, **3 197 951 bytes,
+64 ms, 23 MiB**. See ADR-008 and `tests/metadata_bounds_test.rs`.
 
 ## The fields a human types: characters, and one value that travels
 `title`, `comment` and metadata string values are bounded in **characters** —
@@ -371,6 +399,22 @@ prerequisite as the `ods-postgres` container on 5435.
 `REDPANDA_BROKERS` overrides the address; the fallback in `tests/common/mod.rs`
 is what the pipeline and a bare `cargo test` land on, and the failure it raises
 now carries the `docker run` line itself (`tests/events_roundtrip.rs`).
+
+**A standing container and a test that never cleaned up compound, and they did.**
+This broker allocates one file descriptor per partition and refuses every create
+past its FD ceiling — 204 under `--smp 1 --overprovisioned`. `events_roundtrip.rs`
+created three uniquely-named topics per run and deleted none, so roughly 65 runs
+were enough to turn the suite red for a reason that is in no diff: `InvalidPartitions`
+on three of four tests, indistinguishable from a code regression. 186 leftovers
+had to be pruned by hand on 2026-09-14, and that cost a review cycle. Two halves
+now, because either alone leaks: a `RoundTripTopic` guard deletes its topic on
+`Drop` — so a *failing* run, which is the one a reviewer repeats, costs the broker
+nothing — and every run first sweeps `doceditor-roundtrip-*` topics older than an
+hour, which is what survives a `kill -9`. The sweep is the reason a saturated
+broker heals on the next run instead of staying red until someone re-derives why;
+it matches on the prefix and the timestamp only, because `editor.events` and the
+cluster's internals live on that same broker. Measured: 9 leftovers → 0, 7/7
+green, and a run now ends with exactly as many topics as it started with.
 
 ## Environment Variables
 `.env.example` lists exactly what `src/config.rs` reads — keep the two in step.
