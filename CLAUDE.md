@@ -10,6 +10,21 @@ alone is enough to pull `h2` 0.3 back into `Cargo.lock`, which is the file
 answers to the same rule for the same reason — `default-features = false`, no
 `http2` — which is why the Pub/Sub producer talks REST and not gRPC (ADR-011).
 
+**An advisory against a crate this service COMPILES fails the build; the
+lockfile's tally does not.** `cargo audit` reads `Cargo.lock`, which is wider
+than the binary — it pins the optional dependencies of our dependencies — so
+its "1 vulnerability found" has, every time it has been examined here, named a
+crate nothing compiles (`rsa` through `sqlx-mysql`, `anyhow`, `spin`). The
+judgement is the intersection with `cargo tree -e normal`, it is a command
+rather than a habit (`scripts/audit-delivered-graph.sh`, CI job `Advisories`),
+and `tests/advisories.rs` keeps that command wired and non-vacuous. It exists
+because on 2026-09-14 RUSTSEC-2026-0285 landed on `rustls` 0.23.40 — shipped
+here through `sqlx` since the service was written, and through `reqwest` since
+ADR-011 — and **nothing in the repository went red**: the only dependency guard
+names `h2` 0.3, and a guard shaped for one crate says nothing about the next
+one. Take the fix, not the ignore; there is no `.cargo/audit.toml` here and
+ADR-012 says why.
+
 ## Project
 ods-platform
 
@@ -57,6 +72,18 @@ says `maximum: 100`) and `?page=0` answered `"page": 0` above the first page: a
 client computing `ceil(total / per_page)` sees one page of a hundred, and one
 walking `0, 1, 2` reads the first page twice. Nothing was red — the clamp test
 called the *service*, which is the one place the response is not visible.
+
+**And the order the pages are drawn from is TOTAL**, which is the other half
+of "a page is what was served": `ORDER BY updated_at DESC` alone ties whenever
+one transaction writes two documents — `now()` is the transaction timestamp —
+and PostgreSQL then returns tied rows in whatever order the plan produces,
+choosing a different plan for different offsets. Measured over 2 000 tied
+documents, `OFFSET 0` ran an index scan and `OFFSET 1900` a sort; walking all
+twenty pages returned 2 000 rows holding **1 999** documents — one twice, one
+never. Today's data has no ties at all (7 074 documents, zero), so the list was
+stable by a property of the traffic rather than of the query. It is
+`updated_at DESC, id DESC` now. Anything paginating here orders by something
+unique; see ADR-013 and `tests/list_stability_test.rs`.
 
 `Pagination::offset()` is **saturating, not `*`**. `(page - 1) * per_page`
 overflows for a page a caller can type: `page=9223372036854775807` panicked the
