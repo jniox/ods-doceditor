@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has little or nothing code-actionable — nine turns running on doceditor — what to do with the turn, the nine places the real defects have actually been, and the duty to measure a hypothesis before coding it
+description: When a BA report has little or nothing code-actionable — eleven turns running on doceditor — what to do with the turn, the eleven places the real defects have actually been, and the duty to measure a hypothesis before coding it
 metadata:
   type: feedback
 ---
@@ -16,7 +16,7 @@ this order:
    divergence BR-0002 exists to prevent.
 2. **Then go find a defect yourself, by reading a path rather than a report.**
 
-**Why:** measured eight turns running on doceditor (lots 5 to 12 —
+**Why:** measured eleven turns running on doceditor (lots 5 to 15 —
 2026-09-13/14). Each report said, in substance, *"no dev cycle needed on the
 code"*. Each turn found something real, and none of it was subtle once looked at:
 
@@ -125,15 +125,41 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   saying so with numbers made the decision stronger than repeating it would
   have.
 
-**How to apply.** These ten are a checklist, not anecdotes: concurrency on the
+- **lot 15 — the input nobody parsed, and the test that could not see it.**
+  Every other input is parsed into a value at the boundary; the **query string**
+  and the **path parameters** were not, so `serde` typed them and the
+  *framework* answered whatever it refused — seven wire responses in
+  `text/plain` (or with no body at all) outside the closed error enumeration the
+  contract publishes. `tests/error_surface.rs` was green throughout because it
+  compares `src/error.rs` with `docs/openapi.yaml`: **a test that compares two
+  sources cannot see a response neither source produces.** Ask of every
+  framework extractor: *who answers when it refuses, and in what shape?* On the
+  same query string, one gesture — the field left empty — had four answers, and
+  the worst was the silent one: `?search=` answered `200` **with an empty page**
+  to a tenant owning documents. Lot 13's "plausible lie" again, one parameter
+  over.
+  Two more durable halves. First, **the suite made the fix smaller**: trimming
+  every parameter turned `?status=published%20` — a typo lot 13 refuses *on
+  purpose* — into a valid status, and `list_contract_test.rs` went red. Run the
+  whole suite before believing a repair; a neighbouring test often encodes a
+  deliberate decision that a generalisation would overturn in silence. Second,
+  **re-measuring a "non-code" deviation is where the other find was**: the live
+  Cloud Run revision already carried `EVENT_BUS=pubsub` and
+  `PUBSUB_TOPIC=editor-events`, variables no line of `config.rs` reads and which
+  the deployment descriptor does not list — the deployment had chosen, the code
+  never learned. That is decision-grade information, so it went to a human
+  review (HR-20260914-007) instead of a fourth cycle of the same paragraph.
+
+**How to apply.** These eleven are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
 whose unit (bytes/characters) differs from the unit its contract and its column
 count in, and a **constraint that lives outside the application code entirely**
 — an index expression, a column type, a trigger — refusing what the code
-happily accepts, and a rule whose check is silent about every shape of input it
-was not written for. Also
+happily accepts, a rule whose check is silent about every shape of input it
+was not written for, and **an input the boundary never parsed at all, whose
+refusals are therefore written by the framework**. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
