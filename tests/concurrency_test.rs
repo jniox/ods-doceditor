@@ -171,12 +171,11 @@ async fn two_concurrent_content_updates_each_leave_a_restorable_version() {
         "each content mutation must take the next version number, without gap or collision"
     );
 
-    let bodies: Vec<String> = version_repo::list_versions(&pool, tenant_id, doc.id)
-        .await
-        .expect("history is readable")
-        .into_iter()
-        .map(|v| v.content)
-        .collect();
+    // Bodies come from the read that serves them, one version at a time. The
+    // history list carries only summaries — it is unpaginated, so a projection
+    // that dragged every body along cost the whole document history in memory
+    // for a response that contains none of it. See `tests/history_read_test.rs`.
+    let bodies = version_bodies(&pool, tenant_id, doc.id).await;
     for expected in [
         "<p>version one</p>",
         "<p>edited by A</p>",
@@ -196,6 +195,29 @@ async fn two_concurrent_content_updates_each_leave_a_restorable_version() {
         "the document must point at the last version written"
     );
     assert_eq!(doc.content, bodies_last_writer(&bodies));
+}
+
+/// Every body the history holds, most recent first, fetched the way a product
+/// fetches one: `GET /documents/{id}/versions/{n}`, the single read whose
+/// purpose is to hand a prior body back.
+///
+/// The order matters to [`bodies_last_writer`] below, which reads the surviving
+/// body off the front — so it is the history's own order (`version DESC`), not
+/// the ascending one [`version_numbers`] asserts on.
+async fn version_bodies(pool: &PgPool, tenant_id: Uuid, document_id: Uuid) -> Vec<String> {
+    let mut numbers = version_numbers(pool, tenant_id, document_id).await;
+    numbers.reverse();
+
+    let mut bodies = Vec::new();
+    for version in numbers {
+        bodies.push(
+            version_repo::get_version(pool, tenant_id, document_id, version)
+                .await
+                .expect("each version of the history is readable")
+                .content,
+        );
+    }
+    bodies
 }
 
 /// The surviving body is whichever writer committed last; the test only needs

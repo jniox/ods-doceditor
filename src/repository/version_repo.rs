@@ -1,10 +1,39 @@
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::domain::document::DocumentVersion;
+use crate::domain::document::{DocumentVersion, DocumentVersionSummary};
 use crate::domain::text::Comment;
 use crate::error::{AppError, AppResult};
 use crate::repository::tenant_context::begin_tenant_tx;
+
+/// The full projection of a version row, body included.
+///
+/// Used by exactly one read — `GET /documents/{id}/versions/{n}` — because that
+/// is the one whose purpose is to hand a prior body back to a product.
+pub const VERSION_COLUMNS: &str = "id, document_id, tenant_id, version, yjs_snapshot, \
+                                   created_by, created_at, comment, snapshot_size_bytes, \
+                                   is_auto, content";
+
+/// The projection of a version row **without** its body: what the history list
+/// serves, and what every write path needs back after inserting one.
+///
+/// Named separately from [`VERSION_COLUMNS`] for the same reason
+/// `document_repo` names `SUMMARY_COLUMNS` apart from `DOC_COLUMNS`, only with
+/// more at stake: a page of documents is capped at a hundred rows, a version
+/// history is capped at nothing, so the cost of reading bodies nobody asked for
+/// grows without bound. Measured before this split, on the 512 MiB the
+/// deployment allocates: a document at the published 10 MB ceiling with 55
+/// versions — an afternoon of autosaves — answered
+/// `GET /documents/{id}/versions` with an **OOM kill of the process**, not with
+/// a 500. The response it was building is nine kilobytes of JSON and contains
+/// no body at all; `docs/openapi.yaml` says so explicitly.
+///
+/// The three write paths take it too. `insert_version` used to return the body
+/// it had just been given, straight back out of PostgreSQL, for three callers
+/// of which **none** reads it: creation and content mutation discard the value
+/// entirely, and the explicit snapshot renders only the fields below.
+pub const VERSION_SUMMARY_COLUMNS: &str = "id, document_id, tenant_id, version, created_by, \
+                                           created_at, comment, snapshot_size_bytes, is_auto";
 
 /// Insert one immutable version row inside an existing tenant transaction.
 ///
@@ -31,7 +60,7 @@ pub(crate) async fn insert_version(
     tenant_id: Uuid,
     document_id: Uuid,
     new: NewVersion<'_>,
-) -> AppResult<DocumentVersion> {
+) -> AppResult<DocumentVersionSummary> {
     let NewVersion {
         version,
         content,
@@ -44,14 +73,16 @@ pub(crate) async fn insert_version(
     // are restored together, so both are measured together.
     let snapshot_size = (content.len() + yjs_snapshot.len()).min(i32::MAX as usize) as i32;
 
-    let version: DocumentVersion = sqlx::query_as(
+    // `RETURNING` the summary and not the row: the body was just sent *to*
+    // PostgreSQL by this very statement, so asking for it back doubles the cost
+    // of every save on a value none of the three callers reads.
+    let version: DocumentVersionSummary = sqlx::query_as(&format!(
         r#"INSERT INTO editor.document_versions
             (document_id, tenant_id, version, yjs_snapshot, created_by, comment,
              snapshot_size_bytes, is_auto, content)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id, document_id, tenant_id, version, yjs_snapshot, created_by,
-                   created_at, comment, snapshot_size_bytes, is_auto, content"#,
-    )
+         RETURNING {VERSION_SUMMARY_COLUMNS}"#
+    ))
     .bind(document_id)
     .bind(tenant_id)
     .bind(version)
@@ -78,7 +109,7 @@ pub async fn create_version(
     created_by: Uuid,
     comment: Option<&Comment>,
     is_auto: bool,
-) -> AppResult<DocumentVersion> {
+) -> AppResult<DocumentVersionSummary> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
     // Read the body to snapshot (defense-in-depth: filter by tenant_id).
@@ -175,18 +206,17 @@ pub async fn list_versions(
     pool: &PgPool,
     tenant_id: Uuid,
     document_id: Uuid,
-) -> AppResult<Vec<DocumentVersion>> {
+) -> AppResult<Vec<DocumentVersionSummary>> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
     ensure_live_document(&mut tx, tenant_id, document_id).await?;
 
-    let versions: Vec<DocumentVersion> = sqlx::query_as(
-        r#"SELECT id, document_id, tenant_id, version, yjs_snapshot, created_by,
-                  created_at, comment, snapshot_size_bytes, is_auto, content
+    let versions: Vec<DocumentVersionSummary> = sqlx::query_as(&format!(
+        r#"SELECT {VERSION_SUMMARY_COLUMNS}
          FROM editor.document_versions
          WHERE document_id = $1 AND tenant_id = $2
-         ORDER BY version DESC"#,
-    )
+         ORDER BY version DESC"#
+    ))
     .bind(document_id)
     .bind(tenant_id)
     .fetch_all(&mut *tx)
@@ -212,12 +242,11 @@ pub async fn get_version(
     // `ensure_live_document`.
     ensure_live_document(&mut tx, tenant_id, document_id).await?;
 
-    let version: Option<DocumentVersion> = sqlx::query_as(
-        r#"SELECT id, document_id, tenant_id, version, yjs_snapshot, created_by,
-                  created_at, comment, snapshot_size_bytes, is_auto, content
+    let version: Option<DocumentVersion> = sqlx::query_as(&format!(
+        r#"SELECT {VERSION_COLUMNS}
          FROM editor.document_versions
-         WHERE document_id = $1 AND tenant_id = $2 AND version = $3"#,
-    )
+         WHERE document_id = $1 AND tenant_id = $2 AND version = $3"#
+    ))
     .bind(document_id)
     .bind(tenant_id)
     .bind(version_number)

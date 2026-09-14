@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::domain::document::{
     Document, DocumentStatus, DocumentSummary, DocumentUpdate, DocumentVersion,
+    DocumentVersionSummary,
 };
 use crate::domain::pagination::Pagination;
 use crate::domain::text::{Comment, Title, MAX_METADATA_VALUE_CHARS};
@@ -244,7 +245,7 @@ impl DocumentService {
         document_id: Uuid,
         created_by: Uuid,
         comment: Option<&str>,
-    ) -> AppResult<DocumentVersion> {
+    ) -> AppResult<DocumentVersionSummary> {
         let comment = comment.map(Comment::parse).transpose()?;
         let version = version_repo::create_version(
             &self.pool,
@@ -264,11 +265,16 @@ impl DocumentService {
     }
 
     /// List versions for a document.
+    ///
+    /// Summaries, never bodies: the history is unpaginated by contract, so a
+    /// projection that carried the bodies cost the whole of a document's
+    /// history in memory for a response that contains none of it. See
+    /// [`DocumentVersionSummary`] and `tests/history_read_test.rs`.
     pub async fn list_versions(
         &self,
         tenant_id: Uuid,
         document_id: Uuid,
-    ) -> AppResult<Vec<DocumentVersion>> {
+    ) -> AppResult<Vec<DocumentVersionSummary>> {
         version_repo::list_versions(&self.pool, tenant_id, document_id).await
     }
 

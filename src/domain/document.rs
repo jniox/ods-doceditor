@@ -98,6 +98,36 @@ pub struct DocumentVersion {
     pub content: String,
 }
 
+/// A version record without its body, for the history list.
+///
+/// The same split as [`DocumentSummary`], and for a sharper reason: the
+/// document list is capped at a hundred rows, the version history is capped at
+/// nothing. `GET /documents/{id}/versions` returns numbers, dates, authors,
+/// comments and sizes — `docs/openapi.yaml` says "Bodies are not included" —
+/// but the SQL under it read every body anyway and dropped them one layer
+/// higher. Measured against the deployment's own 512 MiB: 55 versions of a
+/// 10 MB document took the **instance** down with an OOM kill, on a request
+/// whose answer is nine kilobytes of JSON.
+///
+/// It is a type rather than a convention because that is what stops the next
+/// read path from being written with the body in it — the same reasoning as
+/// [`crate::domain::text::Title`] and [`crate::domain::pagination::Pagination`]:
+/// a value that must not travel is easiest to keep still when it is not in
+/// the struct at all. The one read that exists to serve a body,
+/// `GET /documents/{id}/versions/{n}`, returns [`DocumentVersion`].
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct DocumentVersionSummary {
+    pub id: Uuid,
+    pub document_id: Uuid,
+    pub tenant_id: Uuid,
+    pub version: i32,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub comment: Option<String>,
+    pub snapshot_size_bytes: i32,
+    pub is_auto: bool,
+}
+
 /// The fields a PATCH may change; `None` means "leave as is".
 ///
 /// A struct rather than a row of positional `Option`s: four of them in a row,
