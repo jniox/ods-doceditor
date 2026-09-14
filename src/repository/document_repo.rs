@@ -1,55 +1,151 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::domain::document::Document;
+use crate::domain::document::{word_count, Document, DocumentSummary, DocumentUpdate};
+use crate::domain::metadata::Metadata;
+use crate::domain::pagination::Pagination;
+use crate::domain::text::Title;
 use crate::error::{AppError, AppResult};
 use crate::repository::tenant_context::begin_tenant_tx;
+use crate::repository::version_repo::{insert_version, NewVersion};
 
-/// Create a new document and return it.
+/// How much of a document PostgreSQL is asked to index for full-text search.
+///
+/// Not a performance knob: a `tsvector` cannot hold more than 1 048 575 bytes
+/// of lexemes, and an index expression that raises makes the **write** raise.
+/// Until migration 009 the index covered `title || ' ' || content` whole, so
+/// whether a document could be stored at all depended on the *vocabulary* of
+/// its body rather than on its size — measured on PostgreSQL 17: a body of
+/// 798 893 bytes of distinct reference codes was refused while 10 050 000 bytes
+/// of ordinary repetitive prose went in, against a `MAX_DOCUMENT_SIZE_MB` that
+/// said 10 MB at the time and says 2 MB since HR-20260914-001. Lowering the
+/// ceiling does not make this bound redundant: it is what keeps the storable
+/// size independent of where the ceiling moves next.
+///
+/// Characters and not bytes, because PostgreSQL's `left()` counts characters.
+/// The worst case measured for this value — 250 000 characters of distinct
+/// accented tokens — produces 576 628 bytes of `tsvector`, a little over half
+/// the hard limit. See `tests/search_index_test.rs`, which re-measures it in
+/// three alphabets rather than trusting this paragraph.
+pub const INDEXED_PREFIX_CHARS: usize = 250_000;
+
+/// The searchable projection of a document, named once.
+///
+/// Migration 009 defines `editor.searchable_text(title, content)` as the first
+/// [`INDEXED_PREFIX_CHARS`] characters of the title followed by the body, and
+/// builds the GIN index on it. The predicate below goes through the same
+/// function, which is what makes the two agree: an inlined copy would still
+/// answer, but it would stop matching the index — and a sequential scan would
+/// then evaluate `to_tsvector` over the untruncated body and raise, on a read,
+/// the error this batch removed from the write.
+pub const SEARCHABLE_TEXT: &str = "editor.searchable_text(title, content)";
+
+/// The full-text predicate, built in one place so the tests measure the same
+/// SQL the service sends.
+pub fn search_predicate(param_placeholder: &str) -> String {
+    format!(
+        "to_tsvector('english', {SEARCHABLE_TEXT}) @@ \
+         plainto_tsquery('english', {param_placeholder})"
+    )
+}
+
+/// Full document projection, body included.
+const DOC_COLUMNS: &str = "id, tenant_id, title, status, created_by, created_at, updated_at, \
+                           deleted_at, current_version, word_count, metadata, content";
+
+/// List projection: everything except the body (see `DocumentSummary`).
+const SUMMARY_COLUMNS: &str = "id, tenant_id, title, status, created_by, created_at, updated_at, \
+                               deleted_at, current_version, word_count, metadata";
+
+/// Create a new document, with its body, and seed version 1.
+///
+/// The version row is written in the same transaction as the document: a
+/// document whose history starts at version 2 (which is what happened before
+/// this batch) makes "restore the original" impossible for every product.
+///
+/// The title arrives as a parsed [`Title`] rather than as a `&str`, and so does
+/// the one in [`DocumentUpdate`]: this module is the only writer of a
+/// `VARCHAR(500)` column, so requiring the parsed value here is what makes "a
+/// title is trimmed and at most 500 characters" true of every path, present and
+/// future, instead of true of whichever caller remembered. See
+/// [`crate::domain::text`].
+///
+/// [`Metadata`] is here for the same reason and it is the newer of the two: the
+/// `jsonb` column had no bound at all beyond the payload ceiling, and this
+/// module is its only writer. See [`crate::domain::metadata`].
 pub async fn create_document(
     pool: &PgPool,
     tenant_id: Uuid,
-    title: &str,
+    title: &Title,
     created_by: Uuid,
-    metadata: serde_json::Value,
+    metadata: &Metadata,
+    content: &str,
 ) -> AppResult<Document> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    let doc: Document = sqlx::query_as(
-        r#"INSERT INTO editor.documents (tenant_id, title, status, created_by, metadata)
-        VALUES ($1, $2, 'draft', $3, $4)
-        RETURNING id, tenant_id, title, status, created_by, created_at, updated_at,
-                  deleted_at, current_version, word_count, metadata"#,
-    )
+    let doc: Document = sqlx::query_as(&format!(
+        r#"INSERT INTO editor.documents (tenant_id, title, status, created_by, metadata, content, word_count)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6)
+        RETURNING {DOC_COLUMNS}"#
+    ))
     .bind(tenant_id)
-    .bind(title)
+    .bind(title.as_str())
     .bind(created_by)
-    .bind(&metadata)
+    .bind(metadata.as_value())
+    .bind(content)
+    .bind(word_count(content))
     .fetch_one(&mut *tx)
     .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    // `is_auto = true`: the service took this snapshot, no product asked for it.
+    insert_version(
+        &mut tx,
+        tenant_id,
+        doc.id,
+        NewVersion {
+            version: doc.current_version,
+            content,
+            yjs_snapshot: &[],
+            created_by,
+            comment: Some("initial version"),
+            is_auto: true,
+        },
+    )
+    .await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok(doc)
 }
 
 /// List documents for a tenant with pagination and optional status filter.
+///
+/// The page arrives already normalised (see [`Pagination`]) rather than as two
+/// loose integers: `(page - 1) * per_page` used to be computed here from
+/// whatever the query string carried, and `page=9223372036854775807` overflowed
+/// it — a panic on a debug build, and a wrap to `OFFSET -200` on a release one,
+/// which PostgreSQL refuses outright.
 pub async fn list_documents(
     pool: &PgPool,
     tenant_id: Uuid,
-    page: i64,
-    per_page: i64,
+    pagination: Pagination,
     status_filter: Option<&str>,
     search: Option<&str>,
-) -> AppResult<(Vec<Document>, i64)> {
+) -> AppResult<(Vec<DocumentSummary>, i64)> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
-    let offset = (page - 1) * per_page;
+    let offset = pagination.offset();
 
     // Base WHERE always includes tenant_id (defense-in-depth, not just RLS)
-    let base_count = "SELECT COUNT(*)::bigint FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL";
-    let base_rows = "SELECT id, tenant_id, title, status, created_by, created_at, updated_at, deleted_at, current_version, word_count, metadata FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL";
+    let base_count =
+        "SELECT COUNT(*)::bigint FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL"
+            .to_string();
+    let base_rows = format!(
+        "SELECT {SUMMARY_COLUMNS} FROM editor.documents WHERE tenant_id = $1 AND deleted_at IS NULL"
+    );
 
     // Build dynamic query for count (no ORDER BY, no LIMIT/OFFSET)
-    let (count_sql, count_args) = build_list_query(base_count, status_filter, search, false);
+    let (count_sql, count_args) = build_list_query(&base_count, status_filter, search, false);
 
     let total: (i64,) = {
         let mut q = sqlx::query_as(&count_sql);
@@ -61,7 +157,7 @@ pub async fn list_documents(
     };
 
     // Build dynamic query for rows (with ORDER BY + LIMIT/OFFSET via bind)
-    let (rows_sql, rows_args) = build_list_query(base_rows, status_filter, search, true);
+    let (rows_sql, rows_args) = build_list_query(&base_rows, status_filter, search, true);
 
     // Append LIMIT/OFFSET with parameterized binds
     let param_idx_after_args = 2 + rows_args.len(); // $1=tenant_id, then dynamic args
@@ -69,18 +165,20 @@ pub async fn list_documents(
     let offset_param = format!("${}", param_idx_after_args + 1);
     let rows_sql = format!("{rows_sql} LIMIT {limit_param} OFFSET {offset_param}");
 
-    let docs: Vec<Document> = {
+    let docs: Vec<DocumentSummary> = {
         let mut q = sqlx::query_as(&rows_sql);
         q = q.bind(tenant_id);
         for arg in &rows_args {
             q = q.bind(arg.as_str());
         }
-        q = q.bind(per_page);
+        q = q.bind(pagination.per_page());
         q = q.bind(offset);
         q.fetch_all(&mut *tx).await?
     };
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok((docs, total.0))
 }
 
@@ -102,8 +200,13 @@ fn build_list_query(
     }
 
     if let Some(q) = search {
+        // The body is searchable too, now that there is one — through the same
+        // named projection the index is built on (migration 009). Inlining
+        // `title || ' ' || content` here is what used to make a large document
+        // unstorable, and would now make a large document unsearchable-by-500.
         sql.push_str(&format!(
-            " AND to_tsvector('english', title) @@ plainto_tsquery('english', ${param_idx})"
+            " AND {}",
+            search_predicate(&format!("${param_idx}"))
         ));
         args.push(q.to_string());
         // param_idx += 1; // not needed further but included for correctness
@@ -126,40 +229,60 @@ pub async fn get_document(
 ) -> AppResult<Document> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    let doc: Option<Document> = sqlx::query_as(
-        r#"SELECT id, tenant_id, title, status, created_by, created_at, updated_at,
-                  deleted_at, current_version, word_count, metadata
+    let doc: Option<Document> = sqlx::query_as(&format!(
+        r#"SELECT {DOC_COLUMNS}
          FROM editor.documents
-         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL"#,
-    )
+         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL"#
+    ))
     .bind(document_id)
     .bind(tenant_id)
     .fetch_optional(&mut *tx)
     .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     doc.ok_or_else(|| AppError::NotFound("Document not found".to_string()))
 }
 
-/// Update document metadata (title, status, metadata fields).
+/// Update a document (title, status, metadata and/or body).
+///
+/// A body change advances `current_version` and writes the matching immutable
+/// version row in the same transaction — the GTM contract is that every content
+/// mutation leaves a restorable record, which cannot be the caller's
+/// responsibility without losing the guarantee.
+///
 /// Defense-in-depth: filters by both id AND tenant_id.
 pub async fn update_document(
     pool: &PgPool,
     tenant_id: Uuid,
     document_id: Uuid,
-    title: Option<&str>,
-    status: Option<&str>,
-    metadata: Option<serde_json::Value>,
+    updated_by: Uuid,
+    update: DocumentUpdate<'_>,
 ) -> AppResult<Document> {
+    let DocumentUpdate {
+        title,
+        status,
+        metadata,
+        content,
+    } = update;
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // First fetch the current document to validate transitions
-    let current: Option<Document> = sqlx::query_as(
-        r#"SELECT id, tenant_id, title, status, created_by, created_at, updated_at,
-                  deleted_at, current_version, word_count, metadata
+    // First fetch the current document to validate transitions.
+    //
+    // `FOR UPDATE` is what makes the next version number safe to compute in
+    // Rust: the read and the write below are one read-modify-write on
+    // `current_version`, and without the lock two concurrent editors read the
+    // same number, both claim it, and the `UNIQUE (document_id, version)` of
+    // migration 003 turns the loser into a 500 on a legitimate save. Two
+    // editors on one document is this service's normal traffic, not an edge
+    // case. See tests/concurrency_test.rs.
+    let current: Option<Document> = sqlx::query_as(&format!(
+        r#"SELECT {DOC_COLUMNS}
          FROM editor.documents
-         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL"#,
-    )
+         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+         FOR UPDATE"#
+    ))
     .bind(document_id)
     .bind(tenant_id)
     .fetch_optional(&mut *tx)
@@ -183,36 +306,59 @@ pub async fn update_document(
         }
     }
 
-    let final_title = title.unwrap_or(&current.title);
+    let final_title = title.as_ref().map_or(current.title.as_str(), Title::as_str);
     let final_status = status.unwrap_or(&current.status);
-    let final_metadata = metadata.unwrap_or(current.metadata.clone());
+    let final_metadata = metadata.map_or_else(|| current.metadata.clone(), Metadata::into_value);
+    let final_content = content.unwrap_or(&current.content);
+    let final_version = match content {
+        Some(_) => current.current_version + 1,
+        None => current.current_version,
+    };
 
-    let doc: Document = sqlx::query_as(
+    let doc: Document = sqlx::query_as(&format!(
         r#"UPDATE editor.documents
-         SET title = $1, status = $2, metadata = $3, updated_at = now()
-         WHERE id = $4 AND tenant_id = $5 AND deleted_at IS NULL
-         RETURNING id, tenant_id, title, status, created_by, created_at, updated_at,
-                   deleted_at, current_version, word_count, metadata"#,
-    )
+         SET title = $1, status = $2, metadata = $3, content = $4, word_count = $5,
+             current_version = $6, updated_at = now()
+         WHERE id = $7 AND tenant_id = $8 AND deleted_at IS NULL
+         RETURNING {DOC_COLUMNS}"#
+    ))
     .bind(final_title)
     .bind(final_status)
     .bind(&final_metadata)
+    .bind(final_content)
+    .bind(word_count(final_content))
+    .bind(final_version)
     .bind(document_id)
     .bind(tenant_id)
     .fetch_one(&mut *tx)
     .await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    if content.is_some() {
+        insert_version(
+            &mut tx,
+            tenant_id,
+            document_id,
+            NewVersion {
+                version: final_version,
+                content: final_content,
+                yjs_snapshot: &[],
+                created_by: updated_by,
+                comment: None,
+                is_auto: true,
+            },
+        )
+        .await?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok(doc)
 }
 
 /// Soft-delete a document.
 /// Defense-in-depth: filters by both id AND tenant_id.
-pub async fn delete_document(
-    pool: &PgPool,
-    tenant_id: Uuid,
-    document_id: Uuid,
-) -> AppResult<()> {
+pub async fn delete_document(pool: &PgPool, tenant_id: Uuid, document_id: Uuid) -> AppResult<()> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
     let result = sqlx::query(
@@ -229,6 +375,8 @@ pub async fn delete_document(
         return Err(AppError::NotFound("Document not found".to_string()));
     }
 
-    tx.commit().await.map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit failed: {e}")))?;
     Ok(())
 }

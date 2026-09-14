@@ -1,0 +1,17 @@
+- [h2 advisory campaign](project_h2_advisory_campaign.md) — HR-20260909-001: already delivered here, why the unit keeps re-opening, and the runbook premises that were false
+- [Test database, broker & CI](project_test_database.md) — the 5435 fallback, the STANDING broker on 19092 (removing it is what turns the suite red), the virgin-DB schema race, and why local green proves nothing
+- [Batches 2026-09-13](project_doceditor_batch_20260913.md) — what to do when a BA report has nothing code-actionable, the version-allocation race found that way, and why HR-20260913-001 was decided but never executed
+- [Scope of an order](feedback_scoped_mechanical_fix.md) — when an order names one file stay in it; when it says "fix the BA report" it does not — and the idle-watchdog's `wip:` commit
+- [Batches 2026-09-14](project_doceditor_batch_20260914.md) — lot 6: h2 re-verified not redone, the soft-delete leak found by auditing a rule across its call sites, and the branch-from-dev order that had to be deviated from
+- [Batch 2026-09-14 lot 7](project_doceditor_batch_20260914_lot7.md) — the 7-cycle "operational" finding closed by SET ROLE, the two-pool split, and the sqlx::migrate! compile-time trap
+- [Batch 2026-09-14 lot 8](project_doceditor_batch_20260914_lot8.md) — four defects on one seam: normalised in one layer, reported in another; the value-that-travels fix, and `use actix_web::test` shadowing `#[test]`
+- [Batch 2026-09-14 lot 9](project_doceditor_batch_20260914_lot9.md) — one number used as two ceilings: the documented maximum was unreachable, and the bench carried no JsonConfig at all
+- [Batch 2026-09-14 lot 10](project_doceditor_batch_20260914_lot10.md) — a bound named in characters and applied in bytes, the rename that stored what it never validated, and a hypothesis killed by measurement before any code
+- [Batch 2026-09-14 lot 11](project_doceditor_batch_20260914_lot11.md) — the search index decided what could be stored, and bounding it alone would have moved the 500 to the read path
+- [Batch 2026-09-14 lot 12](project_doceditor_batch_20260914_lot12.md) — the response was right and the query was not: an OOM kill of the instance, and the half of the fix measurement refused to credit
+- [Batch 2026-09-14 lot 13](project_doceditor_batch_20260914_lot13.md) — a teardown that only ran on the happy path, and a bound that lived in prose while the page multiplied it by a hundred
+- [Batch 2026-09-14 lot 14](project_doceditor_batch_20260914_lot14.md) — two human decisions taken, dispatched and never executed; a ceiling sized against the platform's own default concurrency
+- [Batch 2026-09-14 lot 15](project_doceditor_batch_20260914_lot15.md) — the query string was the last unparsed input: seven answers outside the contract, and a suite that made the fix smaller
+- [Batch 2026-09-14 lot 16](project_doceditor_batch_20260914_lot16.md) — the second decision in two batches taken but never routed; the deployment had chosen a transport in May and the code never learned
+- ["Operational, not code"](feedback_operational_not_code.md) — a premise to measure, not a category to file under: what the process itself can do about the condition
+- [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — eleven cycles running: what to do with the turn, the eleven places the defects have actually been, and measuring a hypothesis before coding it

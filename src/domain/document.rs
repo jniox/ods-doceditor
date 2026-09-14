@@ -2,6 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::metadata::Metadata;
+use crate::domain::text::Title;
+
 /// Valid document status values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,7 +44,7 @@ impl DocumentStatus {
     }
 }
 
-/// Domain model for a document.
+/// Domain model for a document, body included.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Document {
     pub id: Uuid,
@@ -55,9 +58,32 @@ pub struct Document {
     pub current_version: i32,
     pub word_count: i32,
     pub metadata: serde_json::Value,
+    /// The authored body. The product brings its own editor; DocEditor owns
+    /// the canonical storage and the version history of what it produced.
+    pub content: String,
 }
 
-/// Domain model for a document version.
+/// A document without its body, for list responses.
+///
+/// Listing is paginated precisely because collections get large; shipping every
+/// body in a page of 100 would make the endpoint unusable for the very case
+/// pagination exists for.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct DocumentSummary {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub current_version: i32,
+    pub word_count: i32,
+    pub metadata: serde_json::Value,
+}
+
+/// Domain model for a document version — an immutable snapshot of the body.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct DocumentVersion {
     pub id: Uuid,
@@ -70,6 +96,66 @@ pub struct DocumentVersion {
     pub comment: Option<String>,
     pub snapshot_size_bytes: i32,
     pub is_auto: bool,
+    pub content: String,
+}
+
+/// A version record without its body, for the history list.
+///
+/// The same split as [`DocumentSummary`], and for a sharper reason: the
+/// document list is capped at a hundred rows, the version history is capped at
+/// nothing. `GET /documents/{id}/versions` returns numbers, dates, authors,
+/// comments and sizes — `docs/openapi.yaml` says "Bodies are not included" —
+/// but the SQL under it read every body anyway and dropped them one layer
+/// higher. Measured against the deployment's own 512 MiB: 55 versions of a
+/// 10 MB document took the **instance** down with an OOM kill, on a request
+/// whose answer is nine kilobytes of JSON.
+///
+/// It is a type rather than a convention because that is what stops the next
+/// read path from being written with the body in it — the same reasoning as
+/// [`crate::domain::text::Title`] and [`crate::domain::pagination::Pagination`]:
+/// a value that must not travel is easiest to keep still when it is not in
+/// the struct at all. The one read that exists to serve a body,
+/// `GET /documents/{id}/versions/{n}`, returns [`DocumentVersion`].
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct DocumentVersionSummary {
+    pub id: Uuid,
+    pub document_id: Uuid,
+    pub tenant_id: Uuid,
+    pub version: i32,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub comment: Option<String>,
+    pub snapshot_size_bytes: i32,
+    pub is_auto: bool,
+}
+
+/// The fields a PATCH may change; `None` means "leave as is".
+///
+/// A struct rather than a row of positional `Option`s: four of them in a row,
+/// three of the same type, is a signature where a caller can silently swap two
+/// arguments and still compile.
+///
+/// `title` is a parsed [`Title`] and not a `&str` on purpose: this struct used
+/// to carry the string the caller sent while the service validated
+/// `title.trim()` beside it, so a 500-character title with a leading space was
+/// accepted here and refused by `VARCHAR(500)` one layer below — a `500` on a
+/// legal rename. A value that is checked and a value that is stored can only
+/// diverge while they are two values. See [`crate::domain::text`].
+#[derive(Debug, Default, Clone)]
+pub struct DocumentUpdate<'a> {
+    pub title: Option<Title>,
+    pub status: Option<&'a str>,
+    pub metadata: Option<Metadata>,
+    pub content: Option<&'a str>,
+}
+
+/// Number of whitespace-separated words in a body.
+///
+/// Deliberately naive: the body may be HTML, Markdown or JSON depending on the
+/// calling product, and DocEditor does not parse any of them. `word_count` is a
+/// display hint, never a billing or integrity input.
+pub fn word_count(content: &str) -> i32 {
+    content.split_whitespace().count().min(i32::MAX as usize) as i32
 }
 
 #[cfg(test)]
@@ -95,10 +181,29 @@ mod tests {
     }
 
     #[test]
+    fn test_word_count() {
+        assert_eq!(word_count(""), 0);
+        assert_eq!(word_count("   \n\t "), 0);
+        assert_eq!(word_count("un"), 1);
+        // Naive on purpose: tags are not stripped, so markup fuses with its word.
+        assert_eq!(
+            word_count("<h1>Article 1</h1><p>Les parties conviennent.</p>"),
+            4
+        );
+        assert_eq!(word_count("  espaces   multiples  "), 2);
+    }
+
+    #[test]
     fn test_status_from_str() {
         assert_eq!(DocumentStatus::parse("draft"), Some(DocumentStatus::Draft));
-        assert_eq!(DocumentStatus::parse("published"), Some(DocumentStatus::Published));
-        assert_eq!(DocumentStatus::parse("archived"), Some(DocumentStatus::Archived));
+        assert_eq!(
+            DocumentStatus::parse("published"),
+            Some(DocumentStatus::Published)
+        );
+        assert_eq!(
+            DocumentStatus::parse("archived"),
+            Some(DocumentStatus::Archived)
+        );
         assert_eq!(DocumentStatus::parse("unknown"), None);
     }
 }

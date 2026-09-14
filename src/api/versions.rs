@@ -20,15 +20,11 @@ pub async fn create_version(
 ) -> Result<HttpResponse, AppError> {
     let document_id = path.into_inner();
 
-    // BR-022: validate comment length
-    if let Some(ref comment) = body.comment {
-        if comment.len() > 500 {
-            return Err(AppError::Validation(
-                "Comment must be at most 500 characters".to_string(),
-            ));
-        }
-    }
-
+    // BR-022 (the comment's 500-character bound) lives in `DocumentService`,
+    // which parses it into a `domain::text::Comment`. It used to be checked
+    // here, in bytes, against a contract that counts characters — so a
+    // 400-character accented comment was refused by a rule named "500
+    // characters".
     let version = svc
         .create_version(
             auth.tenant_id,
@@ -43,6 +39,7 @@ pub async fn create_version(
         "created_at": version.created_at,
         "created_by": version.created_by,
         "comment": version.comment,
+        "snapshot_size_bytes": version.snapshot_size_bytes,
     })))
 }
 
@@ -64,6 +61,7 @@ pub async fn list_versions(
                 "created_by": v.created_by,
                 "snapshot_size_bytes": v.snapshot_size_bytes,
                 "comment": v.comment,
+                "is_auto": v.is_auto,
             })
         })
         .collect();
@@ -91,5 +89,6 @@ pub async fn get_version(
         "snapshot_size_bytes": version.snapshot_size_bytes,
         "comment": version.comment,
         "is_auto": version.is_auto,
+        "content": version.content,
     })))
 }
