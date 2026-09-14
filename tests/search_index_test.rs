@@ -1,6 +1,7 @@
 //! The body this service accepts, and the search index that could not hold it.
 //!
-//! `MAX_DOCUMENT_SIZE_MB` (10 by default) is published — in `.env.example`, in
+//! `MAX_DOCUMENT_SIZE_MB` (10 by default when this was measured, 2 since
+//! HR-20260914-001) is published — in `.env.example`, in
 //! the repo's `CLAUDE.md` and in `docs/openapi.yaml` — as the largest body
 //! DocEditor stores, and `api::payload` exists precisely so that a body of
 //! exactly that size can be carried over HTTP. Underneath, every document was
@@ -113,8 +114,9 @@ macro_rules! app_with_limits {
 /// A body within the documented ceiling is stored, whatever its vocabulary.
 ///
 /// This is the defect, stated as the product's own promise: a caller who reads
-/// `MAX_DOCUMENT_SIZE_MB=10` and sends one megabyte gets a document, not a
-/// `500`.
+/// `MAX_DOCUMENT_SIZE_MB` and sends a body within it gets a document, not a
+/// `500`. Measured when the ceiling was 10 MB; the bound this file checks is
+/// the index's, which is the same whatever the ceiling is.
 #[actix_web::test]
 async fn a_body_of_entirely_distinct_words_is_stored_like_any_other() {
     let pool = setup_test_pool().await;

@@ -75,8 +75,10 @@ edits = 3 records").
 - `migrations/006_add_document_content.sql` adds the column; the migration is
   additive and idempotent like every other one in this repository.
 - Version rows grow with the size of the body, once per content change. The
-  payload is bounded by `MAX_DOCUMENT_SIZE_MB` (default 10), which now bounds
-  both the request and the stored body. No retention policy is defined yet; if
+  payload is bounded by `MAX_DOCUMENT_SIZE_MB` (default 2 since ADR-009, 10
+  when this was written), which bounds the stored body — the request that
+  carries it is bounded separately and higher, see ADR-009 and
+  `src/api/payload.rs`. No retention policy is defined yet; if
   history growth becomes a cost, that is a separate decision and it must not be
   taken by making versions mutable.
 - `GET /api/v1/documents/{id}/versions/{version}` returns the body, so a prior

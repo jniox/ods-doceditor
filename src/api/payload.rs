@@ -164,7 +164,7 @@ mod tests {
     /// the promise `MAX_DOCUMENT_SIZE_MB` makes by being named after documents.
     #[test]
     fn the_payload_ceiling_admits_the_worst_case_encoding_of_a_full_body() {
-        let body = 10 * 1024 * 1024;
+        let body = crate::config::DEFAULT_MAX_DOCUMENT_BYTES;
         let worst_case_wire = body * 2 + 1024; // every byte escaped, plus a title
         assert!(payload_ceiling(body) >= worst_case_wire);
     }

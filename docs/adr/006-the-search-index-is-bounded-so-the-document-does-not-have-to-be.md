@@ -4,8 +4,12 @@
 
 ## Context
 
-`MAX_DOCUMENT_SIZE_MB` (10 by default) is what this service publishes as the
-largest body it stores. ADR-001 made the body the thing DocEditor owns, and
+`MAX_DOCUMENT_SIZE_MB` (10 by default when this was written, 2 since ADR-009
+and HR-20260914-001) is what this service publishes as the largest body it
+stores. Nothing below depends on which of the two it is: the index budget is
+spent by the *vocabulary* of the text, so the ceiling and this bound are
+independent, which is the reason to name the searchable projection once rather
+than to keep the two numbers in step. ADR-001 made the body the thing DocEditor owns, and
 `src/api/payload.rs` exists so that a body of exactly that size can be carried
 over HTTP — the previous batch fixed a ceiling that made the documented maximum
 unreachable.

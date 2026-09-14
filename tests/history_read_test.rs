@@ -18,7 +18,9 @@
 //!
 //! Measured on the running binary before this file existed, against the
 //! deployment's own limits — `ops/cloudrun/doceditor.json` allocates
-//! **512 MiB**, `MAX_DOCUMENT_SIZE_MB` defaults to **10**:
+//! **512 MiB**, and `MAX_DOCUMENT_SIZE_MB` defaulted to **10** (2 since
+//! HR-20260914-001, which lowers the cost of this read by the same factor
+//! without changing anything this file asserts):
 //!
 //! ```text
 //! document of 10 484 720 B, 55 versions (54 content PATCHes — an editor's

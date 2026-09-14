@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::config::DEFAULT_MAX_DOCUMENT_BYTES;
 use crate::domain::document::{
     Document, DocumentStatus, DocumentSummary, DocumentUpdate, DocumentVersion,
     DocumentVersionSummary,
@@ -13,9 +14,6 @@ use crate::error::{AppError, AppResult};
 use crate::events::producer::{CloudEvent, EventProducer};
 use crate::repository::{document_repo, template_repo, version_repo};
 
-/// Default body ceiling, matching `MAX_DOCUMENT_SIZE_MB=10`.
-const DEFAULT_MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024;
-
 #[derive(Clone)]
 pub struct DocumentService {
     pool: PgPool,
@@ -24,11 +22,20 @@ pub struct DocumentService {
 }
 
 impl DocumentService {
+    /// A service bounded by the default body ceiling.
+    ///
+    /// The number is read from `config` and not restated here: two independent
+    /// spellings of the same default is how a ceiling comes to be lowered in
+    /// one place and left standing in the other — which is what this
+    /// constructor did until 2026-09-14, carrying its own `10 * 1024 * 1024`
+    /// beside `config.rs`'s own `10`. See
+    /// [`crate::config::DEFAULT_MAX_DOCUMENT_SIZE_MB`] for the measurement
+    /// behind the value and for HR-20260914-001, which settled it.
     pub fn new(pool: PgPool, producer: Arc<dyn EventProducer>) -> Self {
         Self {
             pool,
             producer,
-            max_content_bytes: DEFAULT_MAX_CONTENT_BYTES,
+            max_content_bytes: DEFAULT_MAX_DOCUMENT_BYTES,
         }
     }
 

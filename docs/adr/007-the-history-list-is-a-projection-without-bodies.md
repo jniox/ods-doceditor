@@ -29,8 +29,9 @@ entirely).
 ## What was measured
 
 On the running binary, under the deployment's own limits —
-`ops/cloudrun/doceditor.json` allocates **512 MiB**, `MAX_DOCUMENT_SIZE_MB`
-defaults to **10**.
+`ops/cloudrun/doceditor.json` allocates **512 MiB**, and `MAX_DOCUMENT_SIZE_MB`
+defaulted to **10** (2 since ADR-009; the numbers below were measured at 10 and
+are kept as measured).
 
 A document at the published body ceiling, with 55 versions — 54 content
 `PATCH`es, which is an afternoon of an editor's autosave traffic:

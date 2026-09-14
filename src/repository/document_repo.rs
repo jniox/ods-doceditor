@@ -17,7 +17,10 @@ use crate::repository::version_repo::{insert_version, NewVersion};
 /// whether a document could be stored at all depended on the *vocabulary* of
 /// its body rather than on its size — measured on PostgreSQL 17: a body of
 /// 798 893 bytes of distinct reference codes was refused while 10 050 000 bytes
-/// of ordinary repetitive prose went in. `MAX_DOCUMENT_SIZE_MB` says 10 MB.
+/// of ordinary repetitive prose went in, against a `MAX_DOCUMENT_SIZE_MB` that
+/// said 10 MB at the time and says 2 MB since HR-20260914-001. Lowering the
+/// ceiling does not make this bound redundant: it is what keeps the storable
+/// size independent of where the ceiling moves next.
 ///
 /// Characters and not bytes, because PostgreSQL's `left()` counts characters.
 /// The worst case measured for this value — 250 000 characters of distinct

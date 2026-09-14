@@ -483,8 +483,9 @@ components:
         is merely too big, which is read and refused with `422`.
 
         The two ceilings are not the same number, deliberately. The **document**
-        ceiling is `MAX_DOCUMENT_SIZE_MB` and applies to `content` as stored.
-        The **payload** ceiling applies to the whole request and is larger, so
+        ceiling is `MAX_DOCUMENT_SIZE_MB` — 2097152 bytes by default — and
+        applies to `content` as stored. The **payload** ceiling applies to the
+        whole request and is larger (`2 x` the document ceiling `+ 64 KiB`), so
         that a document of exactly the documented maximum is always carryable
         whatever JSON escaping does to it. Reaching the payload ceiling means
         the request could not be read, and the message names both numbers.
@@ -540,11 +541,24 @@ components:
             prefers; DocEditor stores it verbatim. Mutually exclusive with
             `template_id`.
 
-            Bounded by `MAX_DOCUMENT_SIZE_MB`, and that bound is on the body as
-            **stored**, not on the request that carries it: a body of exactly
-            the maximum is accepted whatever JSON escaping does to its size. Over
-            the maximum is a `422` naming the limit; a request too long to read
-            at all is a `413`.
+            At most **2097152 bytes** of UTF-8 (2 MiB) unless the deployment
+            sets `MAX_DOCUMENT_SIZE_MB` otherwise — and **bytes**, not
+            characters, which is why this field carries no `maxLength`: that
+            keyword counts characters, and a body of Chinese text reaches the
+            ceiling in a third of them. The service counts what storage costs.
+
+            That bound is on the body as **stored**, not on the request that
+            carries it: a body of exactly the maximum is accepted whatever JSON
+            escaping does to its size. Over the maximum is a `422` naming the
+            limit; a request too long to read at all is a `413`.
+
+            2 MiB and not the 10 MiB published until 2026-09-14: the ceiling,
+            the instance memory and the number of requests served at once are
+            one setting in three parts, and at 10 MiB eleven concurrent
+            full-size saves killed the instance — not the requests, the
+            instance, and with it every other tenant's in-flight request. At
+            2 MiB the platform's default concurrency of 80 peaks at two thirds
+            of the memory. See ADR-009.
 
             Stored verbatim means exactly that: the body is neither parsed,
             sanitised nor escaped by this service, and it is returned as it was
@@ -576,7 +590,10 @@ components:
         status: { $ref: "#/components/schemas/DocumentStatus" }
         content:
           type: string
-          description: Supplying this advances the version and snapshots it.
+          description: |
+            Supplying this advances the version and snapshots it. Bounded
+            exactly as on creation: at most **2097152 bytes** of UTF-8 (2 MiB)
+            by default, counted in bytes and therefore carrying no `maxLength`.
         metadata:
           $ref: "#/components/schemas/Metadata"
 

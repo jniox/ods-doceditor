@@ -135,7 +135,17 @@ async fn main() -> std::io::Result<()> {
     // the metadata beside it, so making the two equal — which is what this did
     // until 2026-09-14 — means a document of exactly the documented maximum is
     // refused by the framework before the service ever sees it.
-    let max_document_bytes = config.max_document_size_mb * 1024 * 1024;
+    let max_document_bytes = config.max_document_bytes();
+    // Logged for the same reason as the topic: this ceiling is one of three
+    // settings that only make sense together (with the instance memory and the
+    // request concurrency), and the other two are not in this repository. An
+    // operator comparing them needs to read the effective value, not the
+    // template's. See ADR-009.
+    tracing::info!(
+        max_document_bytes,
+        payload_ceiling_bytes = payload::payload_ceiling(max_document_bytes),
+        "Document body ceiling in force"
+    );
 
     // Document service
     let doc_service =

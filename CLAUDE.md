@@ -127,7 +127,9 @@ a third `if x.len() > N`. See `tests/text_bounds_test.rs`, which asks the
 question in four alphabets.
 
 ## Two ceilings, and why they are not one number
-`MAX_DOCUMENT_SIZE_MB` bounds the **document body as stored**. The HTTP payload
+`MAX_DOCUMENT_SIZE_MB` bounds the **document body as stored** — 2 MB by
+default, and that number is sized against the instance rather than chosen (see
+ADR-009 and the section below). The HTTP payload
 that carries one is bounded separately and higher — `payload_ceiling()` in
 `src/api/payload.rs` returns `2 × body + 64 KiB` — because JSON wraps the body
 in quotes, escapes some of its characters (`"` → `\"`, `\` → `\\`) and puts the
@@ -214,18 +216,54 @@ other than the one its name promised. See ADR-007 and
 differ by four orders of magnitude must cost the same to list — rather than
 trusting this paragraph.
 
-### Measured and NOT fixed: the three settings that only make sense together
-`MAX_DOCUMENT_SIZE_MB=10`, `memory: 512Mi` and an unbounded number of concurrent
-requests are related, and nothing relates them. Measured, with the fix in place:
-**6 concurrent full-size content saves survive (peak 418 MiB); 10 kill the
-instance.** The `RETURNING` half of the fix is real but does not move that
-threshold (433 → 418 MiB at 6 concurrent; 10 is fatal either way) — the dominant
-cost there is the buffered request payload plus its parsed `String`, not the row
-that comes back, and this repo does not claim otherwise. Raising the body
-ceiling to 50 MB would make **two** simultaneous saves fatal. The remedies — a
-smaller ceiling, more instance memory, a Cloud Run concurrency bound, an
-in-process admission limit — are a sizing decision with no spec, and
-`ops/cloudrun/doceditor.json` is outside this repository. Reported, not guessed.
+### The three settings that only make sense together — one of them is now set
+`MAX_DOCUMENT_SIZE_MB`, `memory: 512Mi` and the number of requests served at
+once are one setting in three parts, and for months nothing related them. The
+third part is the one nobody had written down: `ops/cloudrun/doceditor.json`
+sets no `--concurrency`, so **Cloud Run's own default of 80 applies**, and that
+is the number the deployment has to survive.
+
+Measured on the running binary in a cgroup at the deployment's 512 MiB, N
+concurrent full-size saves of **distinct** documents:
+
+```text
+10 MB, N=10 -> 200 ×10, peak 451 MiB      10 MB, N=12 -> oom-kill, MainPID=0
+ 4 MB, N=80 -> oom-kill, MainPID=0         3 MB, N=80 -> 200 ×80, peak 475 MiB
+ 2 MB, N=80 -> 200 ×80, peak 340 MiB
+```
+
+At 10 MB, **eleven ordinary saves killed the instance** — not the requests, the
+instance, so every other tenant's in-flight request with it. HR-20260914-001
+(option A, it@orbusdigital.com, executor named as *dev, in the doceditor
+repository*) lowered the ceiling: **the default is 2 MB since 2026-09-14**, and
+the number is the measurement's, not a taste — 3 MB survives 80 with 7% of the
+memory to spare, which is not a margin, and 4 MB does not survive. See ADR-009.
+
+Three drifts closed with it, because a ceiling stated in four places is a
+ceiling that will be lowered in three. `DocumentService::new` carried its own
+`10 * 1024 * 1024` beside `config.rs`'s own `"10"`; `main.rs` computed
+`mb * 1024 * 1024` — non-saturating — one line before handing the result to a
+function that saturates *and says why*; and `.parse().unwrap_or(10)` turned
+`MAX_DOCUMENT_SIZE_MB=2MB` into 10 MB in silence. Now: one constant
+(`config::DEFAULT_MAX_DOCUMENT_SIZE_MB`), one saturating conversion
+(`AppConfig::max_document_bytes`), and a value this service cannot honour —
+including `0` — **refuses the boot** instead of being replaced by a different
+one. An operator who lowers a safety ceiling and is not obeyed learns nothing
+until an instance dies.
+
+`tests/document_ceiling_test.rs` holds the code's constant, `.env.example`, the
+contract's number and the contract's *unit* against each other. The unit matters
+as much as the number: `content` is bounded in **bytes** and therefore carries no
+`maxLength`, which counts characters — the trap of the title bound, one field
+over.
+
+**Still open, and deliberately**: nothing in this repository bounds concurrency.
+2 MB makes the platform's *default* concurrency safe; it does not make the
+service safe at any concurrency. Options C (`--concurrency` on Cloud Run) and D
+(an in-process admission limit) of the same human review remain available and
+were not chosen — and C lives outside this repository. Documents already stored
+above 2 MB are untouched: the bound is checked on bodies a caller *sends*, so an
+existing 9 MB document stays readable, renamable and snapshottable.
 
 ## Content and versions
 A document carries a `content` body (HTML/Markdown/JSON — the product brings its
@@ -421,7 +459,9 @@ green, and a run now ends with exactly as many topics as it started with.
 - `DATABASE_URL` (required)
 - `SERVER_HOST` (default: 0.0.0.0), `SERVER_PORT` (default: 8087)
 - `LOG_LEVEL` (default: info; `RUST_LOG` wins when set)
-- `MAX_DOCUMENT_SIZE_MB` (default: 10 — the **body**; the payload is derived)
+- `MAX_DOCUMENT_SIZE_MB` (default: **2** since HR-20260914-001 — the **body**,
+  in bytes; the payload ceiling is derived from it, and a malformed or zero
+  value now refuses the boot rather than falling back)
 - `REDPANDA_BROKERS` (**unset means events are dropped**, logged at WARN)
 - `REDPANDA_TOPIC` (default: editor.events)
 - `JWT_RSA_PUBLIC_KEY_B64` (base64-encoded RSA PEM, production)
