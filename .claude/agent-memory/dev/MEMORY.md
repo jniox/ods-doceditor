@@ -8,5 +8,6 @@
 - [Batch 2026-09-14 lot 9](project_doceditor_batch_20260914_lot9.md) — one number used as two ceilings: the documented maximum was unreachable, and the bench carried no JsonConfig at all
 - [Batch 2026-09-14 lot 10](project_doceditor_batch_20260914_lot10.md) — a bound named in characters and applied in bytes, the rename that stored what it never validated, and a hypothesis killed by measurement before any code
 - [Batch 2026-09-14 lot 11](project_doceditor_batch_20260914_lot11.md) — the search index decided what could be stored, and bounding it alone would have moved the 500 to the read path
+- [Batch 2026-09-14 lot 12](project_doceditor_batch_20260914_lot12.md) — the response was right and the query was not: an OOM kill of the instance, and the half of the fix measurement refused to credit
 - ["Operational, not code"](feedback_operational_not_code.md) — a premise to measure, not a category to file under: what the process itself can do about the condition
 - [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — seven cycles running: what to do with the turn, the seven places the defects have actually been, and measuring a hypothesis before coding it

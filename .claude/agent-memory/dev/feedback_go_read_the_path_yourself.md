@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has nothing code-actionable — seven turns running on doceditor — what to do with the turn, the seven places the real defects have actually been, and the duty to measure a hypothesis before coding it
+description: When a BA report has nothing code-actionable — eight turns running on doceditor — what to do with the turn, the seven places the real defects have actually been, and the duty to measure a hypothesis before coding it
 metadata:
   type: feedback
 ---
@@ -16,7 +16,7 @@ this order:
    divergence BR-0002 exists to prevent.
 2. **Then go find a defect yourself, by reading a path rather than a report.**
 
-**Why:** measured seven turns running on doceditor (lots 5, 6, 7, 8, 9, 10, 11 —
+**Why:** measured eight turns running on doceditor (lots 5 to 12 —
 2026-09-13/14). Each report said, in substance, *"no dev cycle needed on the
 code"*. Each turn found something real, and none of it was subtle once looked at:
 
@@ -71,7 +71,21 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   bitmap heap scan rechecks the predicate on the heap row. **Ask of every fix:
   which other layer evaluates this same expression?**
 
-**How to apply.** These seven are a checklist, not anecdotes: concurrency on the
+- **lot 12 — the response was correct and the query was not.** `GET
+  /documents/{id}/versions` renders no bodies, the published contract says so,
+  and the SQL under it read every body anyway for a history that is
+  **unpaginated by contract** — so the projection was the only bound and it
+  bounded nothing. At the published ceilings (55 versions of a 10 MB document,
+  512 MiB of instance) the answer was not a 500 but an **OOM kill of the
+  process**: on Cloud Run that is the instance, so other tenants' in-flight
+  requests die too, and one caller triggers it with two ordinary calls. The
+  proof that this class is invisible from the usual vantage point: one of the
+  new tests, the one asserting the HTTP response carries no body, **passed
+  before the fix**. So lot 9's "test from where the caller stands" has a
+  complement — **ask not only what an endpoint returns but what it had to read
+  to return it**, because a correct answer can be produced at unbounded cost.
+
+**How to apply.** These eight are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
@@ -82,6 +96,17 @@ happily accepts. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
+
+**Publish the hypothesis measurement refuses to credit, too — after the code as
+well as before it.** On lot 12 the fix had two halves; the read half turned an
+OOM kill into `200` in 55 ms, and the write half (`RETURNING` the body back out
+of PostgreSQL for three callers that never read it) moved latency 2 635 → 2 563
+ms (noise) and peak memory 433 → 418 MiB, **without moving the concurrency at
+which the instance dies**. It was kept — a value no caller reads should not
+travel — but the ADR, the commit and the evidence all say what it does not buy.
+A commit that lets a reader believe both halves paid is how the next reviewer
+inherits a false premise, which is the thing [[operational-not-code]] cost seven
+cycles.
 
 **Measure the hypothesis before you code it — including when the library source
 seems to prove it.** On lot 10 the strongest-looking lead was event loss at
