@@ -168,19 +168,32 @@ paths:
       description: |
         Tenant-scoped, paginated, newest-updated first. Bodies are **not**
         included: fetch the document itself for those.
+
+        `page` and `per_page` are normalised rather than refused — a page past
+        the end of a collection is a legitimate question with an empty answer —
+        and **the response reports the normalised values**, not the ones that
+        were sent. Paginate on what comes back: `?per_page=1000` answers
+        `"per_page": 100` above at most a hundred documents, and `?page=0`
+        answers `"page": 1` above the first page.
       parameters:
         - name: page
           in: query
           required: false
+          description: |
+            Below 1 is served as 1. Past the end of the collection is an empty
+            page, at any magnitude an `int64` can hold.
           schema: { type: integer, minimum: 1, default: 1 }
         - name: per_page
           in: query
           required: false
-          description: Clamped to 100.
+          description: Clamped to 100, and the clamped value is what is reported.
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
         - name: status
           in: query
           required: false
+          description: |
+            A value outside this enumeration is a `400`, not an empty page: a
+            typo must not read as "you own no documents".
           schema: { $ref: "#/components/schemas/DocumentStatus" }
         - name: search
           in: query
@@ -206,8 +219,17 @@ paths:
                   total:
                     type: integer
                     description: Size of the whole collection, not of the page.
-                  page: { type: integer }
-                  per_page: { type: integer }
+                  page:
+                    type: integer
+                    minimum: 1
+                    description: The page that was served, after normalisation.
+                  per_page:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    description: The page size that was applied, after clamping.
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -514,6 +536,10 @@ components:
       description: |
         At most 20 keys. Keys match `^[a-z][a-z0-9_]{0,63}$`; string values are
         at most 256 characters.
+
+        `type: object` is enforced, and not merely declared: every rule above is
+        stated about keys, so a string, a number, a boolean or an array would
+        satisfy all of them vacuously. Any of those is a `422`.
       maxProperties: 20
       additionalProperties: true
 

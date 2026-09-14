@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::domain::document::{word_count, Document, DocumentSummary, DocumentUpdate};
+use crate::domain::pagination::Pagination;
 use crate::error::{AppError, AppResult};
 use crate::repository::tenant_context::begin_tenant_tx;
 use crate::repository::version_repo::{insert_version, NewVersion};
@@ -66,16 +67,21 @@ pub async fn create_document(
 }
 
 /// List documents for a tenant with pagination and optional status filter.
+///
+/// The page arrives already normalised (see [`Pagination`]) rather than as two
+/// loose integers: `(page - 1) * per_page` used to be computed here from
+/// whatever the query string carried, and `page=9223372036854775807` overflowed
+/// it — a panic on a debug build, and a wrap to `OFFSET -200` on a release one,
+/// which PostgreSQL refuses outright.
 pub async fn list_documents(
     pool: &PgPool,
     tenant_id: Uuid,
-    page: i64,
-    per_page: i64,
+    pagination: Pagination,
     status_filter: Option<&str>,
     search: Option<&str>,
 ) -> AppResult<(Vec<DocumentSummary>, i64)> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
-    let offset = (page - 1) * per_page;
+    let offset = pagination.offset();
 
     // Base WHERE always includes tenant_id (defense-in-depth, not just RLS)
     let base_count =
@@ -112,7 +118,7 @@ pub async fn list_documents(
         for arg in &rows_args {
             q = q.bind(arg.as_str());
         }
-        q = q.bind(per_page);
+        q = q.bind(pagination.per_page());
         q = q.bind(offset);
         q.fetch_all(&mut *tx).await?
     };

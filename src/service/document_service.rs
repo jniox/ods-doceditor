@@ -2,7 +2,10 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::domain::document::{Document, DocumentSummary, DocumentUpdate, DocumentVersion};
+use crate::domain::document::{
+    Document, DocumentStatus, DocumentSummary, DocumentUpdate, DocumentVersion,
+};
+use crate::domain::pagination::Pagination;
 use crate::error::{AppError, AppResult};
 use crate::events::producer::{CloudEvent, EventProducer};
 use crate::repository::{document_repo, template_repo, version_repo};
@@ -95,17 +98,29 @@ impl DocumentService {
 
     /// List documents for tenant (AC-002). Bodies are not included; fetch the
     /// document itself for those.
+    ///
+    /// The page arrives normalised from the boundary as a [`Pagination`], so
+    /// this layer no longer clamps numbers the response layer would then report
+    /// unclamped — the split that made `?per_page=1000` answer
+    /// `"per_page": 1000` above at most a hundred documents.
+    ///
+    /// `status`, on the other hand, is validated here and refused when it is
+    /// not a [`DocumentStatus`]: an unknown word used to filter nothing out and
+    /// answer `200` with an empty page, which tells a client with a typo that it
+    /// owns no documents. `PATCH` has always answered `400` for the same word.
     pub async fn list_documents(
         &self,
         tenant_id: Uuid,
-        page: i64,
-        per_page: i64,
+        pagination: Pagination,
         status: Option<&str>,
         search: Option<&str>,
     ) -> AppResult<(Vec<DocumentSummary>, i64)> {
-        let page = page.max(1);
-        let per_page = per_page.clamp(1, 100);
-        document_repo::list_documents(&self.pool, tenant_id, page, per_page, status, search).await
+        if let Some(status) = status {
+            if DocumentStatus::parse(status).is_none() {
+                return Err(AppError::BadRequest(format!("Invalid status: {status}")));
+            }
+        }
+        document_repo::list_documents(&self.pool, tenant_id, pagination, status, search).await
     }
 
     /// Get a single document, body included.
@@ -298,28 +313,40 @@ impl DocumentService {
     }
 
     /// Validate metadata keys per BR-029.
+    ///
+    /// The first check is the one that was missing: every rule below is stated
+    /// about *keys*, so `as_object()` answering `None` — for a string, a number,
+    /// a boolean or an array — used to skip all of them and return `Ok`. The
+    /// column is `jsonb` and accepts those happily, so `{"metadata": "…"}` was
+    /// an unvalidated write channel into a field the published contract types as
+    /// an object. A guard that says nothing about the inputs it was not shaped
+    /// for is not a guard; it is a guard-shaped hole.
     fn validate_metadata(metadata: &serde_json::Value) -> AppResult<()> {
-        if let Some(obj) = metadata.as_object() {
-            if obj.len() > 20 {
-                return Err(AppError::Validation(
-                    "Metadata cannot have more than 20 keys".to_string(),
-                ));
+        let Some(obj) = metadata.as_object() else {
+            return Err(AppError::Validation(
+                "Metadata must be a JSON object".to_string(),
+            ));
+        };
+
+        if obj.len() > 20 {
+            return Err(AppError::Validation(
+                "Metadata cannot have more than 20 keys".to_string(),
+            ));
+        }
+        let key_re = regex_lite::Regex::new(r"^[a-z][a-z0-9_]{0,63}$").unwrap();
+        for (key, value) in obj {
+            if !key_re.is_match(key) {
+                return Err(AppError::Validation(format!(
+                    "Metadata key '{}' must match ^[a-z][a-z0-9_]{{0,63}}$",
+                    key
+                )));
             }
-            let key_re = regex_lite::Regex::new(r"^[a-z][a-z0-9_]{0,63}$").unwrap();
-            for (key, value) in obj {
-                if !key_re.is_match(key) {
+            if let Some(s) = value.as_str() {
+                if s.len() > 256 {
                     return Err(AppError::Validation(format!(
-                        "Metadata key '{}' must match ^[a-z][a-z0-9_]{{0,63}}$",
+                        "Metadata value for key '{}' exceeds 256 chars",
                         key
                     )));
-                }
-                if let Some(s) = value.as_str() {
-                    if s.len() > 256 {
-                        return Err(AppError::Validation(format!(
-                            "Metadata value for key '{}' exceeds 256 chars",
-                            key
-                        )));
-                    }
                 }
             }
         }

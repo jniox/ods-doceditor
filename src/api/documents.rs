@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::api::extractors::AuthUser;
 use crate::domain::document::DocumentUpdate;
+use crate::domain::pagination::Pagination;
 use crate::error::AppError;
 use crate::service::document_service::DocumentService;
 
@@ -58,19 +59,26 @@ pub async fn create_document(
 }
 
 /// GET /api/v1/documents
+///
+/// The response reports the page that was **served**, not the one that was
+/// **asked for**. Those differ exactly when the server normalised something —
+/// `page=0` is served as page 1, `per_page=1000` as 100 — and that is precisely
+/// when the caller needs to be told: a client that paginates on the numbers it
+/// sent back computes `ceil(total / 1000)` pages and stops after the first, or
+/// walks `0, 1, 2` and reads the first page twice. Building the `Pagination`
+/// here and rendering the response from that same value leaves no second number
+/// in scope to report by mistake.
 pub async fn list_documents(
     auth: AuthUser,
     svc: web::Data<DocumentService>,
     query: web::Query<ListDocumentsQuery>,
 ) -> Result<HttpResponse, AppError> {
-    let page = query.page.unwrap_or(1);
-    let per_page = query.per_page.unwrap_or(20);
+    let pagination = Pagination::new(query.page, query.per_page);
 
     let (docs, total) = svc
         .list_documents(
             auth.tenant_id,
-            page,
-            per_page,
+            pagination,
             query.status.as_deref(),
             query.search.as_deref(),
         )
@@ -79,8 +87,8 @@ pub async fn list_documents(
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "documents": docs,
         "total": total,
-        "page": page,
-        "per_page": per_page,
+        "page": pagination.page(),
+        "per_page": pagination.per_page(),
     })))
 }
 

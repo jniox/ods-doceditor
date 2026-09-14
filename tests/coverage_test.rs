@@ -14,6 +14,7 @@ use common::setup_test_pool;
 use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt_config};
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::domain::document::DocumentUpdate;
+use ods_doceditor::domain::pagination::Pagination;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
 use sqlx::postgres::PgPoolOptions;
@@ -227,6 +228,12 @@ async fn test_list_search_matches_title_and_body() {
 }
 
 /// AC-002: `per_page` is clamped, so a caller cannot ask for the whole table.
+///
+/// What this test can and cannot see is worth stating, because it is why the
+/// defect it was written for survived it: it calls the **service**, so it proves
+/// the database accepts what normalisation produces, and it proves nothing about
+/// what the **response** tells the caller those numbers were. That second half
+/// lives in `tests/list_contract_test.rs`, which goes through the HTTP layer.
 #[actix_web::test]
 async fn test_per_page_is_clamped() {
     let pool = setup_test_pool().await;
@@ -235,13 +242,25 @@ async fn test_per_page_is_clamped() {
 
     let tenant_id = Uuid::new_v4();
     let (_docs, _total) = svc
-        .list_documents(tenant_id, 1, 100_000, None, None)
+        .list_documents(
+            tenant_id,
+            Pagination::new(Some(1), Some(100_000)),
+            None,
+            None,
+        )
         .await
         .expect("an absurd per_page must be clamped, not passed to the database");
     let (_docs, _total) = svc
-        .list_documents(tenant_id, -5, 0, None, None)
+        .list_documents(tenant_id, Pagination::new(Some(-5), Some(0)), None, None)
         .await
         .expect("a negative page must be clamped, not produce a negative OFFSET");
+    let (_docs, _total) = svc
+        .list_documents(tenant_id, Pagination::new(Some(i64::MAX), None), None, None)
+        .await
+        .expect(
+            "the largest page a query string can carry must reach the database as a \
+                 non-negative OFFSET",
+        );
 }
 
 /// AC-003: a document is retrievable by id; an unknown id is a 404, and so is
