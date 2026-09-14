@@ -28,6 +28,7 @@
 mod common;
 
 use common::{setup_admin_pool, setup_test_pool};
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::repository::document_repo;
 use ods_doceditor::repository::tenant_context::{
     begin_tenant_tx, rls_posture, runtime_role_is_adoptable, session_setup, RUNTIME_ROLE,
@@ -52,7 +53,7 @@ async fn seed(pool: &PgPool, tenant: Uuid) -> Uuid {
         tenant,
         &common::title("RLS enforcement fixture"),
         Uuid::new_v4(),
-        serde_json::json!({}),
+        &Metadata::empty(),
         "<p>body</p>",
     )
     .await

@@ -58,6 +58,7 @@ use common::setup_test_pool;
 use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt_config};
 use ods_doceditor::api::{payload, versions};
 use ods_doceditor::domain::document::DocumentUpdate;
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::repository::tenant_context::begin_tenant_tx;
 use ods_doceditor::repository::version_repo::{VERSION_COLUMNS, VERSION_SUMMARY_COLUMNS};
@@ -96,7 +97,7 @@ async fn document_with_five_versions(
         tenant_id,
         &common::title("Contrat de prestation"),
         user_id,
-        serde_json::json!({}),
+        &Metadata::empty(),
         &body,
     )
     .await

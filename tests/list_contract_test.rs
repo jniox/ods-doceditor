@@ -34,6 +34,7 @@ use actix_web::{http::StatusCode, test, web, App};
 use common::setup_test_pool;
 use ods_doceditor::api::documents;
 use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt_config};
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
 use std::sync::Arc;
@@ -87,7 +88,7 @@ async fn tenant_with_documents(count: usize) -> Fixture {
             tenant_id,
             &format!("Doc {n}"),
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             None,
             None,
         )

@@ -11,6 +11,7 @@ use actix_web::{test, web, App};
 use common::{insert_template, setup_test_pool};
 use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt_config};
 use ods_doceditor::api::{documents, payload, versions};
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
 use std::sync::Arc;
@@ -359,7 +360,7 @@ async fn test_content_is_not_readable_across_tenants() {
             tenant_a,
             "Confidentiel",
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             Some("clauses secrètes"),
             None,
         )

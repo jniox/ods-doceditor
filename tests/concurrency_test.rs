@@ -29,6 +29,7 @@ mod common;
 
 use common::setup_test_pool;
 use ods_doceditor::domain::document::DocumentUpdate;
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::repository::tenant_context::begin_tenant_tx;
 use ods_doceditor::repository::{document_repo, version_repo};
 use sqlx::PgPool;
@@ -123,7 +124,7 @@ async fn two_concurrent_content_updates_each_leave_a_restorable_version() {
         tenant_id,
         &common::title("Contended document"),
         user_id,
-        serde_json::json!({}),
+        &Metadata::empty(),
         "<p>version one</p>",
     )
     .await
@@ -245,7 +246,7 @@ async fn an_explicit_snapshot_racing_a_content_update_does_not_collide() {
         tenant_id,
         &common::title("Snapshot race"),
         user_id,
-        serde_json::json!({}),
+        &Metadata::empty(),
         "<p>version one</p>",
     )
     .await

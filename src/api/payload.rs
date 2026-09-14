@@ -45,10 +45,17 @@ use crate::error::AppError;
 /// Room for everything in the envelope that is not the body.
 ///
 /// Not a round number chosen for comfort: it has to cover the largest envelope
-/// this service's own validation admits — a 500-byte `title`, twenty metadata
-/// keys of 64 bytes holding 256-byte values, a `template_id`, and the field
-/// names and punctuation around them. That is under 7 KiB; 64 KiB leaves an
-/// order of magnitude. See the test at the bottom of this file.
+/// this service's own validation admits — a `title`, the `metadata`, a
+/// `template_id`, and the field names and punctuation around them.
+///
+/// "Admits" is the load-bearing word, and it was false here until 2026-09-14.
+/// The sentence used to reason from the *prose* rules ("twenty metadata keys of
+/// 64 bytes holding 256-byte values … under 7 KiB") while the validation
+/// applied the 256-character rule at depth 1 only and bounded the object's size
+/// not at all — so what this allowance actually admitted was 20 MiB of
+/// metadata, three hundred times its own value, and the test below asserted the
+/// arithmetic of the prose against itself. It now reads the constants the
+/// domain enforces. See [`crate::domain::metadata`].
 pub const ENVELOPE_ALLOWANCE_BYTES: usize = 64 * 1024;
 
 /// The largest HTTP payload that can carry a document of `body_ceiling` bytes.
@@ -127,14 +134,25 @@ pub fn limits(body_ceiling: usize) -> impl Fn(&mut web::ServiceConfig) + Clone {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::metadata::MAX_METADATA_BYTES;
+    use crate::domain::text::MAX_TITLE_CHARS;
 
     /// The allowance is not a magic number: it must cover the rest of the
     /// envelope this service already bounds.
+    ///
+    /// Every term below is read from the constant that *enforces* it, so the
+    /// day someone raises the metadata bound past what the payload ceiling
+    /// reserves, this goes red instead of the instance going down. The previous
+    /// version of this test restated the prose of the rules and was green while
+    /// the service admitted three hundred times the number it asserted.
     #[test]
     fn the_envelope_allowance_covers_the_fields_the_service_bounds() {
-        // title + 20 metadata keys of 64 bytes with 256-byte values and their
-        // punctuation + a uuid template_id + field names and braces.
-        let largest_envelope = 500 + 20 * (64 + 256 + 6) + 36 + 200;
+        // A title is bounded in characters, and a character is at most 4 bytes
+        // of UTF-8 — or 6 on the wire, since a control character is escaped as
+        // `\u00XX`. Metadata is bounded in serialised bytes, which is already
+        // what it costs here. Plus a uuid `template_id`, the field names and
+        // the braces around them.
+        let largest_envelope = MAX_TITLE_CHARS * 6 + MAX_METADATA_BYTES + 36 + 200;
         assert!(
             ENVELOPE_ALLOWANCE_BYTES > largest_envelope,
             "the allowance ({ENVELOPE_ALLOWANCE_BYTES}) must exceed the largest envelope the \

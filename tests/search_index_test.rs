@@ -51,6 +51,7 @@ use actix_web::{http::StatusCode, test, web, App};
 use common::setup_test_pool;
 use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt_config};
 use ods_doceditor::api::{documents, payload};
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::domain::pagination::Pagination;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::repository::document_repo::{
@@ -317,7 +318,7 @@ async fn the_read_path_is_bounded_even_when_postgresql_scans_row_by_row() {
         tenant_id,
         "Annexe des references",
         user_id,
-        serde_json::json!({}),
+        &Metadata::empty(),
         Some(&body_of_distinct_words(120_000)),
         None,
     )

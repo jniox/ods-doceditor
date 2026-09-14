@@ -14,6 +14,7 @@ use common::setup_test_pool;
 use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt_config};
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::domain::document::DocumentUpdate;
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::domain::pagination::Pagination;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
@@ -54,7 +55,7 @@ async fn test_list_pagination_slices_and_counts() {
             tenant_id,
             &format!("Doc {n}"),
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             None,
             None,
         )
@@ -116,7 +117,7 @@ async fn test_list_status_filter_applies_to_rows_and_count() {
                 tenant_id,
                 &format!("Doc {n}"),
                 user_id,
-                serde_json::json!({}),
+                &Metadata::empty(),
                 None,
                 None,
             )
@@ -179,7 +180,7 @@ async fn test_list_search_matches_title_and_body() {
         tenant_id,
         "Quarterly invoice",
         user_id,
-        serde_json::json!({}),
+        &Metadata::empty(),
         None,
         None,
     )
@@ -189,7 +190,7 @@ async fn test_list_search_matches_title_and_body() {
         tenant_id,
         "Unrelated note",
         user_id,
-        serde_json::json!({}),
+        &Metadata::empty(),
         Some("mentions the invoice in the body"),
         None,
     )
@@ -199,7 +200,7 @@ async fn test_list_search_matches_title_and_body() {
         tenant_id,
         "Nothing relevant",
         user_id,
-        serde_json::json!({}),
+        &Metadata::empty(),
         Some("plain text"),
         None,
     )
@@ -281,7 +282,7 @@ async fn test_get_document_by_id() {
             tenant_id,
             "Fetchable",
             user_id,
-            serde_json::json!({"kind": "contract"}),
+            &Metadata::parse(&serde_json::json!({"kind": "contract"})).unwrap(),
             None,
             None,
         )
@@ -329,14 +330,7 @@ async fn test_get_document_after_soft_delete_is_404() {
     let token = generate_test_token(user_id, tenant_id);
 
     let doc = svc
-        .create_document(
-            tenant_id,
-            "Doomed",
-            user_id,
-            serde_json::json!({}),
-            None,
-            None,
-        )
+        .create_document(tenant_id, "Doomed", user_id, &Metadata::empty(), None, None)
         .await
         .unwrap();
     svc.delete_document(tenant_id, doc.id, user_id)
@@ -376,7 +370,7 @@ async fn test_get_specific_version() {
             tenant_id,
             "Historied",
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             Some("v1 body"),
             None,
         )

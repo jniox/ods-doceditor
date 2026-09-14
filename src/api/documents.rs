@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::api::extractors::AuthUser;
 use crate::domain::document::DocumentUpdate;
+use crate::domain::metadata::Metadata;
 use crate::domain::pagination::Pagination;
 use crate::domain::text::Title;
 use crate::error::AppError;
@@ -43,14 +44,22 @@ pub async fn create_document(
     svc: web::Data<DocumentService>,
     body: web::Json<CreateDocumentRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let metadata = body.metadata.clone().unwrap_or(serde_json::json!({}));
+    // Parsed at the boundary, exactly like the title below it: what travels on
+    // is the bounded value, and the `clone()` this line used to do first now
+    // happens inside `parse`, after the size bound has been checked.
+    let metadata = body
+        .metadata
+        .as_ref()
+        .map(Metadata::parse)
+        .transpose()?
+        .unwrap_or_default();
 
     let doc = svc
         .create_document(
             auth.tenant_id,
             &body.title,
             auth.user_id,
-            metadata,
+            &metadata,
             body.content.as_deref(),
             body.template_id,
         )
@@ -118,6 +127,7 @@ pub async fn update_document(
 ) -> Result<HttpResponse, AppError> {
     let document_id = path.into_inner();
     let title = body.title.as_deref().map(Title::parse).transpose()?;
+    let metadata = body.metadata.as_ref().map(Metadata::parse).transpose()?;
 
     let doc = svc
         .update_document(
@@ -127,7 +137,7 @@ pub async fn update_document(
             DocumentUpdate {
                 title,
                 status: body.status.as_deref(),
-                metadata: body.metadata.clone(),
+                metadata,
                 content: body.content.as_deref(),
             },
         )

@@ -7,6 +7,7 @@ use ods_doceditor::api::extractors::test_helpers::{
 };
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::domain::document::DocumentUpdate;
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
 use std::sync::Arc;
@@ -129,28 +130,14 @@ async fn test_list_documents_tenant_isolation() {
     let user_id = Uuid::new_v4();
 
     // Create doc for tenant A
-    svc.create_document(
-        tenant_a,
-        "Doc A",
-        user_id,
-        serde_json::json!({}),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    svc.create_document(tenant_a, "Doc A", user_id, &Metadata::empty(), None, None)
+        .await
+        .unwrap();
 
     // Create doc for tenant B
-    svc.create_document(
-        tenant_b,
-        "Doc B",
-        user_id,
-        serde_json::json!({}),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    svc.create_document(tenant_b, "Doc B", user_id, &Metadata::empty(), None, None)
+        .await
+        .unwrap();
 
     let app = test::init_service(
         App::new()
@@ -197,7 +184,7 @@ async fn test_update_document_status_draft_to_published() {
             tenant_id,
             "To Publish",
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             None,
             None,
         )
@@ -255,7 +242,7 @@ async fn test_update_document_invalid_status_transition() {
             tenant_id,
             "Published Doc",
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             None,
             None,
         )
@@ -313,7 +300,7 @@ async fn test_delete_document_soft_delete() {
             tenant_id,
             "To Delete",
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             None,
             None,
         )
@@ -381,7 +368,7 @@ async fn test_create_and_list_versions() {
             tenant_id,
             "Versioned Doc",
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             None,
             None,
         )

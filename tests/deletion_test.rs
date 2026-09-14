@@ -20,6 +20,7 @@ use common::setup_test_pool;
 use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt_config};
 use ods_doceditor::api::{documents, versions};
 use ods_doceditor::domain::document::DocumentUpdate;
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
 use std::sync::Arc;
@@ -57,7 +58,7 @@ async fn seeded_document(svc: &DocumentService, tenant_id: Uuid, user_id: Uuid) 
             tenant_id,
             "Quarterly report",
             user_id,
-            serde_json::json!({}),
+            &Metadata::empty(),
             Some("<p>first draft, confidential</p>"),
             None,
         )

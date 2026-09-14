@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::domain::document::{word_count, Document, DocumentSummary, DocumentUpdate};
+use crate::domain::metadata::Metadata;
 use crate::domain::pagination::Pagination;
 use crate::domain::text::Title;
 use crate::error::{AppError, AppResult};
@@ -65,12 +66,16 @@ const SUMMARY_COLUMNS: &str = "id, tenant_id, title, status, created_by, created
 /// title is trimmed and at most 500 characters" true of every path, present and
 /// future, instead of true of whichever caller remembered. See
 /// [`crate::domain::text`].
+///
+/// [`Metadata`] is here for the same reason and it is the newer of the two: the
+/// `jsonb` column had no bound at all beyond the payload ceiling, and this
+/// module is its only writer. See [`crate::domain::metadata`].
 pub async fn create_document(
     pool: &PgPool,
     tenant_id: Uuid,
     title: &Title,
     created_by: Uuid,
-    metadata: serde_json::Value,
+    metadata: &Metadata,
     content: &str,
 ) -> AppResult<Document> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
@@ -83,7 +88,7 @@ pub async fn create_document(
     .bind(tenant_id)
     .bind(title.as_str())
     .bind(created_by)
-    .bind(&metadata)
+    .bind(metadata.as_value())
     .bind(content)
     .bind(word_count(content))
     .fetch_one(&mut *tx)
@@ -300,7 +305,7 @@ pub async fn update_document(
 
     let final_title = title.as_ref().map_or(current.title.as_str(), Title::as_str);
     let final_status = status.unwrap_or(&current.status);
-    let final_metadata = metadata.unwrap_or(current.metadata.clone());
+    let final_metadata = metadata.map_or_else(|| current.metadata.clone(), Metadata::into_value);
     let final_content = content.unwrap_or(&current.content);
     let final_version = match content {
         Some(_) => current.current_version + 1,

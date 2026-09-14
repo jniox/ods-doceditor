@@ -6,8 +6,9 @@ use crate::domain::document::{
     Document, DocumentStatus, DocumentSummary, DocumentUpdate, DocumentVersion,
     DocumentVersionSummary,
 };
+use crate::domain::metadata::Metadata;
 use crate::domain::pagination::Pagination;
-use crate::domain::text::{Comment, Title, MAX_METADATA_VALUE_CHARS};
+use crate::domain::text::{Comment, Title};
 use crate::error::{AppError, AppResult};
 use crate::events::producer::{CloudEvent, EventProducer};
 use crate::repository::{document_repo, template_repo, version_repo};
@@ -47,16 +48,13 @@ impl DocumentService {
         tenant_id: Uuid,
         title: &str,
         created_by: Uuid,
-        metadata: serde_json::Value,
+        metadata: &Metadata,
         content: Option<&str>,
         template_id: Option<Uuid>,
     ) -> AppResult<Document> {
         // BR-001: the title is parsed, not merely checked — what is validated
         // is what `document_repo` then stores. See `domain::text`.
         let title = Title::parse(title)?;
-
-        // BR-029: validate metadata keys
-        Self::validate_metadata(&metadata)?;
 
         // A body and a template are two answers to the same question. Picking
         // one silently is how `template_id` became a field clients could send
@@ -146,10 +144,9 @@ impl DocumentService {
         // a 500-character title with a leading space became `22001 value too
         // long` inside `VARCHAR(500)`, and a `500` for the caller.
 
-        // Validate metadata if provided
-        if let Some(ref m) = metadata {
-            Self::validate_metadata(m)?;
-        }
+        // `metadata` needs no check here either: it is a `Metadata`, so it was
+        // bounded — in keys, in characters at every depth, and in serialised
+        // size — when it was built at the boundary. See `domain::metadata`.
 
         if let Some(c) = content {
             self.validate_content(c)?;
@@ -313,51 +310,6 @@ impl DocumentService {
                 "Content exceeds the maximum document size of {} bytes",
                 self.max_content_bytes
             )));
-        }
-        Ok(())
-    }
-
-    /// Validate metadata keys per BR-029.
-    ///
-    /// The first check is the one that was missing: every rule below is stated
-    /// about *keys*, so `as_object()` answering `None` — for a string, a number,
-    /// a boolean or an array — used to skip all of them and return `Ok`. The
-    /// column is `jsonb` and accepts those happily, so `{"metadata": "…"}` was
-    /// an unvalidated write channel into a field the published contract types as
-    /// an object. A guard that says nothing about the inputs it was not shaped
-    /// for is not a guard; it is a guard-shaped hole.
-    fn validate_metadata(metadata: &serde_json::Value) -> AppResult<()> {
-        let Some(obj) = metadata.as_object() else {
-            return Err(AppError::Validation(
-                "Metadata must be a JSON object".to_string(),
-            ));
-        };
-
-        if obj.len() > 20 {
-            return Err(AppError::Validation(
-                "Metadata cannot have more than 20 keys".to_string(),
-            ));
-        }
-        let key_re = regex_lite::Regex::new(r"^[a-z][a-z0-9_]{0,63}$").unwrap();
-        for (key, value) in obj {
-            if !key_re.is_match(key) {
-                return Err(AppError::Validation(format!(
-                    "Metadata key '{}' must match ^[a-z][a-z0-9_]{{0,63}}$",
-                    key
-                )));
-            }
-            if let Some(s) = value.as_str() {
-                // Characters, as the contract says — `str::len()` counts bytes,
-                // which refused a 129-character accented value against a
-                // documented maximum of 256.
-                let length = s.chars().count();
-                if length > MAX_METADATA_VALUE_CHARS {
-                    return Err(AppError::Validation(format!(
-                        "Metadata value for key '{key}' must be at most \
-                         {MAX_METADATA_VALUE_CHARS} characters (got {length})"
-                    )));
-                }
-            }
         }
         Ok(())
     }

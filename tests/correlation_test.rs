@@ -14,6 +14,7 @@ use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt
 use ods_doceditor::api::middleware::{correlate, RequestContext};
 use ods_doceditor::api::{documents, health};
 use ods_doceditor::correlation::{CORRELATION_ID_HEADER, SOURCE_SERVICE_HEADER};
+use ods_doceditor::domain::metadata::Metadata;
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
 use std::sync::Arc;
@@ -164,7 +165,7 @@ async fn test_events_produced_outside_a_request_have_no_correlation_id() {
         Uuid::new_v4(),
         "Hors requête",
         Uuid::new_v4(),
-        serde_json::json!({}),
+        &Metadata::empty(),
         None,
         None,
     )

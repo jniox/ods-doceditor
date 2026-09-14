@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::metadata::Metadata;
 use crate::domain::text::Title;
 
 /// Valid document status values.
@@ -144,7 +145,7 @@ pub struct DocumentVersionSummary {
 pub struct DocumentUpdate<'a> {
     pub title: Option<Title>,
     pub status: Option<&'a str>,
-    pub metadata: Option<serde_json::Value>,
+    pub metadata: Option<Metadata>,
     pub content: Option<&'a str>,
 }
 
