@@ -12,15 +12,16 @@ it@orbusdigital.com). The reference procedure lives in another repo:
 `docstore/docs/adr/006-web-framework.md`.
 
 **doceditor's share has been DONE since 2026-09-09** (`b4b8103`, plus `2b604b4` for HR-20260909-035),
-on branch `feat/doceditor-c20260909-1345-lot1`, and re-verified green on 2026-09-10 **and
-2026-09-12**. If this unit is dispatched again: **verify and report, do not redo — there is nothing
-to commit.**
+on branch `feat/doceditor-c20260909-1345-lot1`, and re-verified green on 2026-09-10, **2026-09-12
+and 2026-09-14**. If this unit is dispatched again: **verify and report, do not redo — there is
+nothing to commit.** The whole verification is five commands and costs one turn-tenth; spend the
+rest of the turn finding a real defect (that is how lots 5 and 6 each found one).
 
 **Why it keeps coming back:** **PR #3 is still OPEN** (`MERGEABLE`/`CLEAN`, base `dev`; it started
 at 4 files and now carries three further lots). Its non-merge — and nothing else — re-opens the work
 unit on every dispatcher pass. **Merging is the `pr` agent's role, not dev's.** As of 2026-09-13,
 after a fourth turn on the same branch (a TEST FAIL triage whose cause was an absent broker on
-the host, not code), this has burnt **seven** dev turns. Say so explicitly in the status so the loop is
+the host, not code), this has burnt **nine** dev turns as of 2026-09-14. Say so explicitly in the status so the loop is
 visible rather than re-diagnosed — and note that the later dispatches arrive dressed as *BA FAIL*
 rather than as the h2 unit, which makes the loop harder to recognise: check `gh pr list --state all`
 before believing the framing.
@@ -44,6 +45,11 @@ with `export PATH="$HOME/.cargo/bin:$PATH"`. There is no `.cargo/audit.toml` to 
 `h2` 0.4.13 (which the same advisory flags, fixed in ≥ 0.4.16). **False.** `git show
 b4b8103:Cargo.lock` shows **0.4.19** from that commit onward — above the fix threshold. 0.4.13 was
 never delivered here. Do not re-raise it.
+
+**BR-0010 is now a WRITTEN STANDARD (STANDARDS.md §7), not just a note in this file** — quote it
+when the order demands "0 vulnerabilities": an advisory is judged on `cargo tree -e normal`, and one
+that only reaches dev edges is *declared and traced*, never reported as exposure. Measured
+2026-09-14: `rsa` AND `anyhow` both answer *nothing to print* under `-e normal`.
 
 **`cargo audit` will never print `0 vulnerabilities` here, and that is not a failure.** It reports
 exactly **1**: RUSTSEC-2023-0071 (`rsa` 0.9.10, Marvin attack, *"No fixed upgrade is available"*),
