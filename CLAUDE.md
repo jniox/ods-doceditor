@@ -37,6 +37,39 @@ The published contract is `docs/openapi.yaml` (OpenAPI 3.1, validated in CI per
 BR-0007). `tests/openapi_test.rs` fails the build if a route is added without
 being documented — update both, or neither.
 
+## Input the service normalises, and what it then reports
+**The list response describes the page that was SERVED, never the one that was
+ASKED for**, and that is a single value rather than a convention to remember:
+`domain::pagination::Pagination` is built at the boundary, travels through the
+service into the repository, and renders the response. Anything that adds a
+paginated endpoint builds one too, instead of clamping in one layer and echoing
+in another — which is exactly how this broke. Until 2026-09-14
+`DocumentService` clamped (`page.max(1)`, `per_page.clamp(1, 100)`) while the
+handler echoed `query.page` / `query.per_page`, so `?per_page=1000` answered
+`"per_page": 1000` above at most a hundred documents (the published contract
+says `maximum: 100`) and `?page=0` answered `"page": 0` above the first page: a
+client computing `ceil(total / per_page)` sees one page of a hundred, and one
+walking `0, 1, 2` reads the first page twice. Nothing was red — the clamp test
+called the *service*, which is the one place the response is not visible.
+
+`Pagination::offset()` is **saturating, not `*`**. `(page - 1) * per_page`
+overflows for a page a caller can type: `page=9223372036854775807` panicked the
+debug build in `document_repo::list_documents` and, on the release build the
+Dockerfile produces, wrapped to `OFFSET -200`, which PostgreSQL refuses
+(`ERROR: OFFSET must not be negative`) — a 500 on a request that only means
+"past the end". Past the end is an empty page, at any magnitude.
+
+**Two guards that used to be vacuous, and the shape they share.**
+`validate_metadata` states every BR-029 rule about *keys*, so `as_object()`
+answering `None` skipped all of them and returned `Ok`: a string, a number, a
+boolean or an array went into the `jsonb` column unvalidated, in a field the
+contract types as an object. It now refuses a non-object (422) before anything
+else. Likewise an unknown `?status=` filtered nothing and answered `200` with an
+empty page — the one reply that is both wrong and plausible, since it reads as
+"you own no documents"; it is a `400` now, as `PATCH` always was for the same
+word. Both have the same shape: **a check that says nothing about the inputs it
+was not shaped for is not a check.** See `tests/list_contract_test.rs`.
+
 ## Content and versions
 A document carries a `content` body (HTML/Markdown/JSON — the product brings its
 own editor, DocEditor owns the storage and the history). Creation writes
