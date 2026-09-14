@@ -10,5 +10,6 @@
 - [Batch 2026-09-14 lot 11](project_doceditor_batch_20260914_lot11.md) — the search index decided what could be stored, and bounding it alone would have moved the 500 to the read path
 - [Batch 2026-09-14 lot 12](project_doceditor_batch_20260914_lot12.md) — the response was right and the query was not: an OOM kill of the instance, and the half of the fix measurement refused to credit
 - [Batch 2026-09-14 lot 13](project_doceditor_batch_20260914_lot13.md) — a teardown that only ran on the happy path, and a bound that lived in prose while the page multiplied it by a hundred
+- [Batch 2026-09-14 lot 14](project_doceditor_batch_20260914_lot14.md) — two human decisions taken, dispatched and never executed; a ceiling sized against the platform's own default concurrency
 - ["Operational, not code"](feedback_operational_not_code.md) — a premise to measure, not a category to file under: what the process itself can do about the condition
 - [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — nine cycles running: what to do with the turn, the nine places the defects have actually been, and measuring a hypothesis before coding it

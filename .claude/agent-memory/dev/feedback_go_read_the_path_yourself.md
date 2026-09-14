@@ -107,7 +107,25 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   computed from) before inventing one — that is what separates a repair from a
   product decision you are not allowed to make.
 
-**How to apply.** These nine are a checklist, not anecdotes: concurrency on the
+- **lot 14 — the actionable work was in the decisions the report CITED.** Tenth
+  report in a row with nothing code-actionable, and both of its non-code
+  deviations pointed at human reviews. Read as JSON rather than through the
+  report's summary, those files contained a decision **already taken** by the
+  human, with `"enactor": "dev"` and "Exécutant : dev, dans le dépôt doceditor"
+  in the option text, and a `enactError: {"reason": "verbe inconnu"}` recording
+  that the dispatcher had failed to route it. A second one had been executed by
+  the resolver *during the turn*, putting a canonical `spec.md` on disk after
+  fourteen cycles of its absence — and that spec settled, in writing, a question
+  this repository's `CLAUDE.md` still called "open, not to be guessed". **So
+  before hunting a new defect: re-read every `HR-*.json` the report cites, and
+  re-check the specs directory even when a dozen cycles say it is empty.** A
+  decision that is taken but unexecuted looks exactly like a decision that is
+  pending, from one level up. And when the decision offers an example value
+  ("ex. 2 Mo"), measure whether the example is the right one — here it was, and
+  saying so with numbers made the decision stronger than repeating it would
+  have.
+
+**How to apply.** These ten are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
