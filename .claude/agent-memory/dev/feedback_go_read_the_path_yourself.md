@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has nothing code-actionable — five turns running on doceditor — what to do with the turn, and the five places the real defects have actually been
+description: When a BA report has nothing code-actionable — six turns running on doceditor — what to do with the turn, the six places the real defects have actually been, and the duty to measure a hypothesis before coding it
 metadata:
   type: feedback
 ---
@@ -16,7 +16,7 @@ this order:
    divergence BR-0002 exists to prevent.
 2. **Then go find a defect yourself, by reading a path rather than a report.**
 
-**Why:** measured five turns running on doceditor (lots 5, 6, 7, 8, 9 —
+**Why:** measured six turns running on doceditor (lots 5, 6, 7, 8, 9, 10 —
 2026-09-13/14). Each report said, in substance, *"no dev cycle needed on the
 code"*. Each turn found something real, and none of it was subtle once looked at:
 
@@ -50,16 +50,44 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   production, it can be *missing the component under test*. The cure is not a
   better test: it is one wiring function that `main.rs` and the tests both call.
 
-**How to apply.** These five are a checklist, not anecdotes: concurrency on the
+- **lot 10 — a bound named in one unit, applied in another, and a value
+  validated that was not the value stored.** `maxLength: 500` and `VARCHAR(500)`
+  both count *characters*; `str::len()` counts bytes, so the largest storable
+  title was 500, 250 or 166 characters depending on the alphabet. Worse, the
+  rename path validated `title.trim()` and stored the untrimmed string: a
+  500-character title with a leading space became `22001 value too long`, i.e. a
+  **500 on a legal request**. Lot 9's question ("what quantity is this limit
+  applied to?") found a second site the moment it was asked of another field.
+
+**How to apply.** These six are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
-re-measured, a value normalised in one layer and reported in another, and a
-configured limit applied to a different quantity from the one it names. Also
+re-measured, a value normalised in one layer and reported in another, a
+configured limit applied to a different quantity from the one it names, and a
+bound whose unit (bytes/characters) differs from the unit its contract and its
+column count in. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
 
+**Measure the hypothesis before you code it — including when the library source
+seems to prove it.** On lot 10 the strongest-looking lead was event loss at
+shutdown: rdkafka's `impl Drop for BaseProducer` really does `purge()` before
+flushing, and this service has a documented history of dropping events in
+silence. Fifteen minutes of probing against the real broker showed it does not
+reproduce (the polling thread is joined first). Writing the `Drop`-flush "fix"
+would have shipped code for a premise and a test flaky by construction. The
+discipline is the same one that unblocked lot 7, applied *before* the code
+rather than after. Record the falsified hypothesis in the evidence folder so the
+next reader does not re-derive it.
+
+**Check your own fixture before you report the service.** The same lot produced
+`search=Reference -> total=0` and, for a minute, "full-text search is entirely
+broken". An earlier step of the probe had renamed that document. A defect you
+cannot reproduce from a clean fixture is not yet a defect.
+
 Hold the line in the other direction too: an internal inconsistency you can *see*
 is not automatically a defect you may *decide*. `archived` freezing the status
 but not the body is a product question with no spec — reported in `CLAUDE.md`,
-still not fixed, across three lots. See [[doceditor-batch-20260914-lot9]],
-[[doceditor-batch-20260914-lot8]] and [[doceditor-batch-20260913]].
+still not fixed, across three lots. See [[doceditor-batch-20260914-lot10]],
+[[doceditor-batch-20260914-lot9]], [[doceditor-batch-20260914-lot8]] and
+[[doceditor-batch-20260913]].

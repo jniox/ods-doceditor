@@ -6,5 +6,6 @@
 - [Batch 2026-09-14 lot 7](project_doceditor_batch_20260914_lot7.md) — the 7-cycle "operational" finding closed by SET ROLE, the two-pool split, and the sqlx::migrate! compile-time trap
 - [Batch 2026-09-14 lot 8](project_doceditor_batch_20260914_lot8.md) — four defects on one seam: normalised in one layer, reported in another; the value-that-travels fix, and `use actix_web::test` shadowing `#[test]`
 - [Batch 2026-09-14 lot 9](project_doceditor_batch_20260914_lot9.md) — one number used as two ceilings: the documented maximum was unreachable, and the bench carried no JsonConfig at all
+- [Batch 2026-09-14 lot 10](project_doceditor_batch_20260914_lot10.md) — a bound named in characters and applied in bytes, the rename that stored what it never validated, and a hypothesis killed by measurement before any code
 - ["Operational, not code"](feedback_operational_not_code.md) — a premise to measure, not a category to file under: what the process itself can do about the condition
-- [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — five cycles running: what to do with the turn, and the five places the defects have actually been
+- [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — six cycles running: what to do with the turn, the six places the defects have actually been, and measuring a hypothesis before coding it
