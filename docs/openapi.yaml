@@ -506,7 +506,15 @@ components:
           type: string
           minLength: 1
           maxLength: 500
-          description: Non-blank once trimmed.
+          description: |
+            Non-blank once trimmed, and stored trimmed — `"   Contrat   "` is
+            created and renamed as `"Contrat"`, on both paths.
+
+            `maxLength` is a count of **characters**, as it is everywhere in
+            JSON Schema and as `VARCHAR(500)` is in PostgreSQL: 500 accented or
+            Chinese characters are accepted as readily as 500 ASCII ones. The
+            service counted bytes until 2026-09-14, which made the real maximum
+            500, 250 or 166 characters depending on the alphabet.
         content:
           type: string
           description: |
@@ -542,7 +550,11 @@ components:
       type: object
       description: Every field is optional; omitted fields are left untouched.
       properties:
-        title: { type: string, minLength: 1, maxLength: 500 }
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Same rule as on creation — trimmed, and counted in characters.
         status: { $ref: "#/components/schemas/DocumentStatus" }
         content:
           type: string
@@ -556,13 +568,16 @@ components:
         comment:
           type: [string, "null"]
           maxLength: 500
-          description: Why this snapshot was taken.
+          description: |
+            Why this snapshot was taken. Stored verbatim (not trimmed), and
+            bounded in **characters**, like every other bound here.
 
     Metadata:
       type: object
       description: |
         At most 20 keys. Keys match `^[a-z][a-z0-9_]{0,63}$`; string values are
-        at most 256 characters.
+        at most 256 **characters** — counted as characters and not as bytes, so
+        the bound does not move with the alphabet.
 
         `type: object` is enforced, and not merely declared: every rule above is
         stated about keys, so a string, a number, a boolean or an array would

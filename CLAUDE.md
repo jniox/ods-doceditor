@@ -12,7 +12,9 @@ alone is enough to pull `h2` 0.3 back into `Cargo.lock`, which is the file
 ods-platform
 
 ## Architecture
-- Domain models: `src/domain/` (Document, DocumentVersion, DocumentStatus)
+- Domain models: `src/domain/` (Document, DocumentVersion, DocumentStatus, and the
+  parsed values the boundary builds: `pagination::Pagination`, `text::Title`,
+  `text::Comment`)
 - Service layer: `src/service/` (DocumentService — business logic, orchestrates repo + events)
 - API handlers: `src/api/` (HTTP handlers, auth extractor, health)
 - Repository: `src/repository/` (PostgreSQL via sqlx, RLS via tenant_context)
@@ -69,6 +71,32 @@ empty page — the one reply that is both wrong and plausible, since it reads as
 "you own no documents"; it is a `400` now, as `PATCH` always was for the same
 word. Both have the same shape: **a check that says nothing about the inputs it
 was not shaped for is not a check.** See `tests/list_contract_test.rs`.
+
+## The fields a human types: characters, and one value that travels
+`title`, `comment` and metadata string values are bounded in **characters** —
+that is what `maxLength` counts in `docs/openapi.yaml` and what `VARCHAR(500)`
+counts in migrations 002 and 003. Rust's `str::len()` counts bytes, and using it
+here made the documented maximum depend on the alphabet: measured on the running
+binary, the largest storable title was **500** ASCII characters, **250** accented
+ones or **166** Chinese ones, on a product whose own examples read *Contrat de
+prestation*. A 400-character comment was refused by a rule named "500
+characters".
+
+The other half was worse. `update_document` validated `title.trim()` and handed
+the **untrimmed** string to the repository, so renaming a document to a
+500-character title with a leading space stored 501 characters into
+`VARCHAR(500)`: `22001 value too long`, surfaced as `500 {"error":"internal_error"}`
+on a legal request. Creating trimmed and renaming untrimmed also stored the same
+title two different ways.
+
+`domain::text::Title` and `domain::text::Comment` exist so that cannot recur:
+they can only be built by parsing, they carry the normalised form, and
+`document_repo` and `version_repo` take **them** rather than `&str`. A value that
+is validated and a value that is stored can only diverge while they are two
+values — the same cure as `Pagination` above. Anything that adds a bounded text
+field parses it into a type and hands the repository that type; it does not add
+a third `if x.len() > N`. See `tests/text_bounds_test.rs`, which asks the
+question in four alphabets.
 
 ## Two ceilings, and why they are not one number
 `MAX_DOCUMENT_SIZE_MB` bounds the **document body as stored**. The HTTP payload
