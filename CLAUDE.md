@@ -1,12 +1,14 @@
 # doceditor
 
 ## Stack
-Rust (Actix-web 4, sqlx 0.8, rdkafka 0.36)
+Rust (Actix-web 4, sqlx 0.8, rdkafka 0.36, reqwest 0.12 for Pub/Sub)
 
 `actix-web` is declared **twice** (dependencies + dev-dependencies) and both
 entries must keep `default-features = false` without `http2`: the dev entry
 alone is enough to pull `h2` 0.3 back into `Cargo.lock`, which is the file
-`cargo audit` reads. See HR-20260909-001 and `tests/framework.rs`.
+`cargo audit` reads. See HR-20260909-001 and `tests/framework.rs`. `reqwest`
+answers to the same rule for the same reason — `default-features = false`, no
+`http2` — which is why the Pub/Sub producer talks REST and not gRPC (ADR-011).
 
 ## Project
 ods-platform
@@ -19,7 +21,8 @@ ods-platform
 - Service layer: `src/service/` (DocumentService — business logic, orchestrates repo + events)
 - API handlers: `src/api/` (HTTP handlers, auth extractor, health)
 - Repository: `src/repository/` (PostgreSQL via sqlx, RLS via tenant_context)
-- Events: `src/events/` (CloudEvents v1.0 via Redpanda/Kafka)
+- Events: `src/events/` — `producer` (the envelope, the trait, Redpanda/Kafka)
+  and `pubsub` (Cloud Pub/Sub over REST, the transport HR-20260914-007 chose)
 - Config: `src/config.rs` (env-based config)
 - Error: `src/error.rs` (AppError with ResponseError impl)
 - Entrypoint: `src/main.rs`
@@ -511,6 +514,12 @@ green, and a run now ends with exactly as many topics as it started with.
 - `MAX_DOCUMENT_SIZE_MB` (default: **2** since HR-20260914-001 — the **body**,
   in bytes; the payload ceiling is derived from it, and a malformed or zero
   value now refuses the boot rather than falling back)
+- `EVENT_BUS` (`pubsub` | `redpanda`/`kafka` | `none`; **unset keeps the
+  historical behaviour**. A transport named but not usable **refuses the boot**)
+- `GCP_PROJECT_ID`, `PUBSUB_TOPIC` (`EVENT_BUS=pubsub`; topic defaults to
+  `editor-events`). `PUBSUB_EMULATOR_HOST` and `GCE_METADATA_HOST` override the
+  Pub/Sub and metadata origins — Google's own names. `PUBSUB_TOPIC_DLQ` is set
+  on the deployed revision and deliberately **not read**
 - `REDPANDA_BROKERS` (**unset means events are dropped**, logged at WARN)
 - `REDPANDA_TOPIC` (default: **editor-events** since spec.md §4.2)
 - `JWT_RSA_PUBLIC_KEY_B64` (base64-encoded RSA PEM, production)
@@ -536,8 +545,58 @@ it. **That guard is the whole point** — publishing to the wrong topic returns
 `Ok` and fails nothing, which is how this service published four months of
 events into a `NoopProducer`.
 
-**Still open, and not ours to close: the transport.** The code publishes with
-`rdkafka`; the provisioned `editor-events` is a *Pub/Sub* topic and no Redpanda
-broker exists in the staging project. The name is independent of the transport —
-that is why it could be settled first — but replacing the producer is a platform
-decision (spec.md §4.3, deviation D-1).
+### And the transport, settled on 2026-09-14: **Cloud Pub/Sub**
+
+**The deployment had already chosen it; the code had never learned.** The live
+Cloud Run revision (`doceditor-00003-vkq`, May 2026) carries `EVENT_BUS=pubsub`,
+`PUBSUB_TOPIC=editor-events`, `PUBSUB_TOPIC_DLQ` and `GCP_PROJECT_ID` — four
+variables no line of `src/config.rs` read, while the code published with
+`rdkafka` into a staging project that has no Redpanda broker. So the
+`NoopProducer` was selected and four months of correct CloudEvents were thrown
+away, in the silence ADR-002 describes. Settled by **HR-20260914-007** (option
+A, 2026-09-14, it@orbusdigital.com, *"Exécutant : dev, dans le dépôt
+doceditor"*); recorded in ADR-011.
+
+`config::select_event_bus` chooses once, from the environment, and **refuses the
+boot rather than falling back**: `EVENT_BUS=pubsub` without `GCP_PROJECT_ID`,
+`EVENT_BUS=redpanda` without `REDPANDA_BROKERS`, or a word naming no transport,
+all stop the process naming the variable to set. That is deliberately stricter
+than elsewhere. A mis-set ceiling eventually kills an instance and leaves a
+trace; **a mis-set bus produces nothing to notice at all**, and refusing to
+start is the only variant of "something is wrong" a silent bus can be turned
+into. `EVENT_BUS` unset keeps the historical behaviour exactly: a broker address
+selects Redpanda, its absence selects nothing, loudly.
+
+**REST and not gRPC**, and that is a dependency decision rather than a style:
+every gRPC client for Pub/Sub pulls `tonic` and therefore `h2`, which this
+estate is under a platform decision to keep out of its shipped graph
+(HR-20260909-001). `reqwest` is therefore in `[dependencies]` with
+`default-features = false` and no `http2` — measured after the change,
+`cargo tree -e normal` holds 675 crates and **h2 is in none of them**, and
+`cargo audit` still reports exactly the one pre-existing `rsa` advisory
+(BR-0010). Do not "simplify" this by taking reqwest's defaults.
+
+**Credentials are not in this repository and never will be**: on Cloud Run the
+runtime service account's token comes from the instance metadata server, and
+`runtime-cloud-run@orbus-ods-staging` already holds `roles/pubsub.publisher`
+(measured 2026-09-14) — which is why this option needed no infrastructure
+change. `PUBSUB_EMULATOR_HOST` and `GCE_METADATA_HOST` override the two origins;
+both names are Google's, not ours.
+
+**One envelope, two bindings.** `cloudevent_attributes()` names the CloudEvents
+attributes once; Kafka prefixes them `ce_`, Pub/Sub `ce-`. The hyphen is the
+HTTP binding's and it is load-bearing: the platform delivers by push
+subscription to Cloud Run, and a subscription with payload unwrapping turns each
+attribute into an HTTP header verbatim, so `ce-type` is the header a standard
+CloudEvents consumer reads. Anything that adds an attribute adds it to that one
+function; `tests/pubsub_transport_test.rs` holds the two bindings against each
+other, and talks to a **socket** rather than to `src/` — a test that compares
+two sources cannot see what goes on the wire.
+
+**`PUBSUB_TOPIC_DLQ` is read by nothing, on purpose**: a dead-letter topic is a
+property of a *subscription*, not of a publisher.
+
+**Still open, and outside this repository**: `~/dev/ops/cloudrun/doceditor.json`
+lists none of the four variables the live revision carries — the descriptor has
+drifted from the revision — and the deployed image must be rebuilt for this code
+to be the code that runs.
