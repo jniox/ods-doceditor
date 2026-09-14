@@ -50,6 +50,16 @@ use uuid::Uuid;
 const TIED_DOCUMENTS: i64 = 40;
 const PER_PAGE: i64 = 10;
 
+/// One fixed tenant per test, instead of a fresh random one, so that a run can
+/// sweep what the previous run left. The dev database is shared with a dozen
+/// other schemas and every other suite here seeds without clearing; forty
+/// *tied* rows are worse than ordinary leftovers, because the next person
+/// measuring `updated_at` collisions on this instance would find this fixture
+/// and read it as production data. (It already happened, inside this batch.)
+/// The two ids differ so the two tests may run in parallel, as cargo runs them.
+const TENANT_PAGE_INDEPENDENCE: Uuid = Uuid::from_u128(0xd0ce_d170_1157_ab1e_0000_0000_0000_0001);
+const TENANT_FULL_WALK: Uuid = Uuid::from_u128(0xd0ce_d170_1157_ab1e_0000_0000_0000_0002);
+
 /// The two plans, in the order the planner itself produced them.
 const INDEX_ONLY: &str = "SET enable_seqscan = off;";
 const SCAN_AND_SORT: &str =
@@ -65,7 +75,7 @@ const SCAN_AND_SORT: &str =
 /// walk below suffers at scale.
 #[tokio::test]
 async fn a_page_does_not_depend_on_the_plan_that_served_it() {
-    let tenant = Uuid::new_v4();
+    let tenant = TENANT_PAGE_INDEPENDENCE;
     seed_tied_documents(tenant).await;
 
     let index_only = planner_pool(INDEX_ONLY).await;
@@ -89,6 +99,8 @@ async fn a_page_does_not_depend_on_the_plan_that_served_it() {
              which plan answered."
         );
     }
+
+    clear_tenant(tenant).await;
 }
 
 /// The consequence a client actually suffers: pages that do not partition.
@@ -99,7 +111,7 @@ async fn a_page_does_not_depend_on_the_plan_that_served_it() {
 /// waiting for a table large enough to provoke the switch.
 #[tokio::test]
 async fn a_walk_across_a_plan_change_returns_every_document_once() {
-    let tenant = Uuid::new_v4();
+    let tenant = TENANT_FULL_WALK;
     let expected = seed_tied_documents(tenant).await;
 
     let index_only = planner_pool(INDEX_ONLY).await;
@@ -135,6 +147,8 @@ async fn a_walk_across_a_plan_change_returns_every_document_once() {
         TIED_DOCUMENTS as usize,
         "every seeded document must appear exactly once"
     );
+
+    clear_tenant(tenant).await;
 }
 
 /// One page, through the service's own repository, on the given plan.
@@ -166,6 +180,11 @@ fn count(haystack: &[String], needle: &str) -> usize {
 /// the *transaction* timestamp, so every row it touches ties exactly. Returns
 /// the titles, which stand in for the documents.
 async fn seed_tied_documents(tenant: Uuid) -> BTreeSet<String> {
+    // Sweep first, and not only on the way out: the run that leaves rows behind
+    // is the one that failed, which is also the run a reviewer repeats. Same
+    // reasoning as the topic sweep in `tests/events_roundtrip.rs`.
+    clear_tenant(tenant).await;
+
     let pool = common::setup_test_pool().await;
     let author = Uuid::new_v4();
     let mut titles = BTreeSet::new();
@@ -210,6 +229,25 @@ async fn seed_tied_documents(tenant: Uuid) -> BTreeSet<String> {
     );
 
     titles
+}
+
+/// Remove everything this fixture's tenant owns, versions first.
+///
+/// An operator act on an operator's pool: the rows are a fixture, not a
+/// tenant's data, and no API deletes rows for real (a delete here is soft).
+async fn clear_tenant(tenant: Uuid) {
+    let admin = common::setup_admin_pool().await;
+    for statement in [
+        "DELETE FROM editor.document_versions WHERE tenant_id = $1",
+        "DELETE FROM editor.documents WHERE tenant_id = $1",
+    ] {
+        sqlx::query(statement)
+            .bind(tenant)
+            .execute(&admin)
+            .await
+            .expect("the fixture's own rows are removable");
+    }
+    admin.close().await;
 }
 
 /// A pool wired like the serving one, plus the planner settings that pin it to
