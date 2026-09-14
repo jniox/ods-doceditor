@@ -214,7 +214,23 @@ fn build_list_query(
     }
 
     if add_order {
-        sql.push_str(" ORDER BY updated_at DESC");
+        // A total order, and `id` is not decoration. `updated_at` alone ties
+        // whenever two documents are written by one transaction — a seed, an
+        // import, a data migration — and PostgreSQL is then free to return
+        // tied rows in whatever order the plan it picked produces. It does not
+        // pick the same plan for every page: measured on 2026-09-14 over 2 000
+        // tied documents, `OFFSET 0` ran an `Index Scan using
+        // idx_documents_tenant_updated` and `OFFSET 1900` a `Sort`, and the
+        // two orders differ by a rotation. Walking the twenty pages of that
+        // list returned 2 000 rows holding **1 999** documents: one returned
+        // twice, one never returned at all.
+        //
+        // A client that walks the pages to build its own list silently loses a
+        // document, and the response says nothing — the same class as the page
+        // this endpoint used to report having served. `id` is the primary key,
+        // so appending it makes the order total and the walk a partition,
+        // whatever plan each page gets. See tests/list_stability_test.rs.
+        sql.push_str(" ORDER BY updated_at DESC, id DESC");
     }
 
     (sql, args)
