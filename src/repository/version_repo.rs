@@ -130,6 +130,42 @@ pub async fn create_version(
     Ok(version)
 }
 
+/// 404 unless `document_id` names a **live** document of this tenant.
+///
+/// Every read of a document's history goes through here, and that single
+/// chokepoint is the fix, not a tidying of it. The defect was an asymmetry
+/// between two neighbouring functions in this very file: `list_versions`
+/// carried the `deleted_at IS NULL` predicate inline and `get_version`, forty
+/// lines below, did not. A soft-deleted document therefore answered 404 on
+/// `GET /documents/{id}` and on `GET /documents/{id}/versions`, and served its
+/// **full body** on `GET /documents/{id}/versions/{n}` — the one read of the
+/// three that returns content, with `n` starting at 1 and increasing by one,
+/// so no knowledge of the history was needed to walk it.
+///
+/// Tenant isolation was never at stake (both queries filter `tenant_id`); what
+/// leaked is a document the caller's own tenant had deleted. Keeping the
+/// predicate in one place is what stops the next read path from being written
+/// without it. See `tests/deletion_test.rs`.
+async fn ensure_live_document(
+    conn: &mut sqlx::PgConnection,
+    tenant_id: Uuid,
+    document_id: Uuid,
+) -> AppResult<()> {
+    // Defense-in-depth: filter by tenant_id as well as relying on RLS.
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM editor.documents WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL)",
+    )
+    .bind(document_id)
+    .bind(tenant_id)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    if !exists {
+        return Err(AppError::NotFound("Document not found".to_string()));
+    }
+    Ok(())
+}
+
 /// List all versions of a document.
 pub async fn list_versions(
     pool: &PgPool,
@@ -138,18 +174,7 @@ pub async fn list_versions(
 ) -> AppResult<Vec<DocumentVersion>> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // Verify document exists (defense-in-depth: filter by tenant_id)
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM editor.documents WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL)",
-    )
-    .bind(document_id)
-    .bind(tenant_id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    if !exists {
-        return Err(AppError::NotFound("Document not found".to_string()));
-    }
+    ensure_live_document(&mut tx, tenant_id, document_id).await?;
 
     let versions: Vec<DocumentVersion> = sqlx::query_as(
         r#"SELECT id, document_id, tenant_id, version, yjs_snapshot, created_by,
@@ -177,6 +202,11 @@ pub async fn get_version(
     version_number: i32,
 ) -> AppResult<DocumentVersion> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+
+    // This is the read that returns the body, so this is the read where a
+    // missing liveness check actually leaks something. See
+    // `ensure_live_document`.
+    ensure_live_document(&mut tx, tenant_id, document_id).await?;
 
     let version: Option<DocumentVersion> = sqlx::query_as(
         r#"SELECT id, document_id, tenant_id, version, yjs_snapshot, created_by,
