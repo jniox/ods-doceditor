@@ -155,6 +155,45 @@ jobs:
       - name: Run tests
         run: cargo test -- --nocapture
 
+  # -- Supply chain ---------------------------------------------------------
+  audit:
+    name: Advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Also caches ~/.cargo/bin, so cargo-audit is compiled once and reused.
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # Same list as the Dockerfile's builder stage, and kept so by
+      # tests/ci_workflow.rs: it is the same compilation. `rdkafka` is taken
+      # with `cmake-build`, so librdkafka is compiled from source here, and
+      # rdkafka_conf.c includes <curl/curl.h> even with -DWITH_CURL=0 --
+      # without libcurl4-openssl-dev this job dies before compiling a single
+      # line of this repository, while staying green on any development
+      # machine, which has those headers installed system-wide.
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libssl-dev \
+            libcurl4-openssl-dev libsasl2-dev curl
+
+      # From crates.io, with its own lockfile: a check on the supply chain is
+      # the wrong place to add a new third-party action to trust.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # Judged on `cargo tree -e normal`, not on the lockfile tally: the
+      # lockfile holds optional dependencies of dependencies that nothing here
+      # compiles. See the script's header and docs/adr/012.
+      - name: Advisories against the delivered graph
+        run: bash scripts/audit-delivered-graph.sh
+
   # -- Docker Build ---------------------------------------------------------
   docker:
     name: Docker Build
