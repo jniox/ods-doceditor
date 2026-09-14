@@ -6,6 +6,7 @@ use crate::domain::document::{
     Document, DocumentStatus, DocumentSummary, DocumentUpdate, DocumentVersion,
 };
 use crate::domain::pagination::Pagination;
+use crate::domain::text::{Comment, Title, MAX_METADATA_VALUE_CHARS};
 use crate::error::{AppError, AppResult};
 use crate::events::producer::{CloudEvent, EventProducer};
 use crate::repository::{document_repo, template_repo, version_repo};
@@ -49,13 +50,9 @@ impl DocumentService {
         content: Option<&str>,
         template_id: Option<Uuid>,
     ) -> AppResult<Document> {
-        // BR-001: validate title
-        let trimmed = title.trim();
-        if trimmed.is_empty() || trimmed.len() > 500 {
-            return Err(AppError::Validation(
-                "Title must be 1-500 characters, non-blank".to_string(),
-            ));
-        }
+        // BR-001: the title is parsed, not merely checked — what is validated
+        // is what `document_repo` then stores. See `domain::text`.
+        let title = Title::parse(title)?;
 
         // BR-029: validate metadata keys
         Self::validate_metadata(&metadata)?;
@@ -81,7 +78,7 @@ impl DocumentService {
         self.validate_content(&content)?;
 
         let doc = document_repo::create_document(
-            &self.pool, tenant_id, trimmed, created_by, metadata, &content,
+            &self.pool, tenant_id, &title, created_by, metadata, &content,
         )
         .await?;
 
@@ -142,15 +139,11 @@ impl DocumentService {
             metadata,
             content,
         } = update;
-        // Validate title if provided
-        if let Some(t) = title {
-            let trimmed = t.trim();
-            if trimmed.is_empty() || trimmed.len() > 500 {
-                return Err(AppError::Validation(
-                    "Title must be 1-500 characters, non-blank".to_string(),
-                ));
-            }
-        }
+        // The title needs no check here: it is a `Title`, so it was trimmed and
+        // bounded when it was built. This layer used to validate `t.trim()` and
+        // hand the untrimmed `t` to the repository one call below — a rename to
+        // a 500-character title with a leading space became `22001 value too
+        // long` inside `VARCHAR(500)`, and a `500` for the caller.
 
         // Validate metadata if provided
         if let Some(ref m) = metadata {
@@ -162,6 +155,7 @@ impl DocumentService {
         }
 
         let has_metadata = metadata.is_some();
+        let has_title = title.is_some();
 
         let doc = document_repo::update_document(
             &self.pool,
@@ -190,7 +184,7 @@ impl DocumentService {
             );
             self.publish(event);
         }
-        if title.is_some() {
+        if has_title {
             changes.push("title");
         }
         if status.is_some() {
@@ -240,6 +234,10 @@ impl DocumentService {
     }
 
     /// Create an explicit version snapshot (AC-007).
+    ///
+    /// BR-022 (the comment's bound) is applied here rather than in the handler:
+    /// the rule belongs to the one layer every caller of this service crosses,
+    /// and `version_repo` will only take the parsed value anyway.
     pub async fn create_version(
         &self,
         tenant_id: Uuid,
@@ -247,12 +245,13 @@ impl DocumentService {
         created_by: Uuid,
         comment: Option<&str>,
     ) -> AppResult<DocumentVersion> {
+        let comment = comment.map(Comment::parse).transpose()?;
         let version = version_repo::create_version(
             &self.pool,
             tenant_id,
             document_id,
             created_by,
-            comment,
+            comment.as_ref(),
             false,
         )
         .await?;
@@ -342,10 +341,14 @@ impl DocumentService {
                 )));
             }
             if let Some(s) = value.as_str() {
-                if s.len() > 256 {
+                // Characters, as the contract says — `str::len()` counts bytes,
+                // which refused a 129-character accented value against a
+                // documented maximum of 256.
+                let length = s.chars().count();
+                if length > MAX_METADATA_VALUE_CHARS {
                     return Err(AppError::Validation(format!(
-                        "Metadata value for key '{}' exceeds 256 chars",
-                        key
+                        "Metadata value for key '{key}' must be at most \
+                         {MAX_METADATA_VALUE_CHARS} characters (got {length})"
                     )));
                 }
             }

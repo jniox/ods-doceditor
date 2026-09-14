@@ -19,6 +19,7 @@
 //!    threads start together -- invisible here, fatal on CI's fresh database.
 #![allow(dead_code)]
 
+use ods_doceditor::domain::text::{Comment, Title};
 use ods_doceditor::repository::tenant_context::{
     begin_tenant_tx, runtime_role_is_adoptable, session_setup,
 };
@@ -161,6 +162,20 @@ pub async fn insert_template(
 
     tx.commit().await.expect("Failed to commit test template");
     id
+}
+
+/// A parsed title for a fixture.
+///
+/// `document_repo` takes a `domain::text::Title` rather than a `&str` so that
+/// no path can validate one string and store another (see `domain::text`); a
+/// test that writes through the repository builds the same value the wire does.
+pub fn title(raw: &str) -> Title {
+    Title::parse(raw).expect("a fixture title is within the documented bounds")
+}
+
+/// A parsed snapshot comment for a fixture, for the same reason.
+pub fn comment(raw: &str) -> Comment {
+    Comment::parse(raw).expect("a fixture comment is within the documented bounds")
 }
 
 /// Canonical local Redpanda address, used when `REDPANDA_BROKERS` is absent.

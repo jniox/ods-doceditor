@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::domain::document::{word_count, Document, DocumentSummary, DocumentUpdate};
 use crate::domain::pagination::Pagination;
+use crate::domain::text::Title;
 use crate::error::{AppError, AppResult};
 use crate::repository::tenant_context::begin_tenant_tx;
 use crate::repository::version_repo::{insert_version, NewVersion};
@@ -20,10 +21,17 @@ const SUMMARY_COLUMNS: &str = "id, tenant_id, title, status, created_by, created
 /// The version row is written in the same transaction as the document: a
 /// document whose history starts at version 2 (which is what happened before
 /// this batch) makes "restore the original" impossible for every product.
+///
+/// The title arrives as a parsed [`Title`] rather than as a `&str`, and so does
+/// the one in [`DocumentUpdate`]: this module is the only writer of a
+/// `VARCHAR(500)` column, so requiring the parsed value here is what makes "a
+/// title is trimmed and at most 500 characters" true of every path, present and
+/// future, instead of true of whichever caller remembered. See
+/// [`crate::domain::text`].
 pub async fn create_document(
     pool: &PgPool,
     tenant_id: Uuid,
-    title: &str,
+    title: &Title,
     created_by: Uuid,
     metadata: serde_json::Value,
     content: &str,
@@ -36,7 +44,7 @@ pub async fn create_document(
         RETURNING {DOC_COLUMNS}"#
     ))
     .bind(tenant_id)
-    .bind(title)
+    .bind(title.as_str())
     .bind(created_by)
     .bind(&metadata)
     .bind(content)
@@ -249,7 +257,7 @@ pub async fn update_document(
         }
     }
 
-    let final_title = title.unwrap_or(&current.title);
+    let final_title = title.as_ref().map_or(current.title.as_str(), Title::as_str);
     let final_status = status.unwrap_or(&current.status);
     let final_metadata = metadata.unwrap_or(current.metadata.clone());
     let final_content = content.unwrap_or(&current.content);

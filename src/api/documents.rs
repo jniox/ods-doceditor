@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::api::extractors::AuthUser;
 use crate::domain::document::DocumentUpdate;
 use crate::domain::pagination::Pagination;
+use crate::domain::text::Title;
 use crate::error::AppError;
 use crate::service::document_service::DocumentService;
 
@@ -104,6 +105,11 @@ pub async fn get_document(
 }
 
 /// PATCH /api/v1/documents/{id}
+///
+/// The title is parsed here, at the boundary, exactly as the page is: what
+/// travels on is the trimmed, bounded value, so no layer downstream can check
+/// one string and store another. That split is what made a rename to a
+/// 500-character title with a leading space answer `500`.
 pub async fn update_document(
     auth: AuthUser,
     svc: web::Data<DocumentService>,
@@ -111,6 +117,7 @@ pub async fn update_document(
     body: web::Json<UpdateDocumentRequest>,
 ) -> Result<HttpResponse, AppError> {
     let document_id = path.into_inner();
+    let title = body.title.as_deref().map(Title::parse).transpose()?;
 
     let doc = svc
         .update_document(
@@ -118,7 +125,7 @@ pub async fn update_document(
             document_id,
             auth.user_id,
             DocumentUpdate {
-                title: body.title.as_deref(),
+                title,
                 status: body.status.as_deref(),
                 metadata: body.metadata.clone(),
                 content: body.content.as_deref(),

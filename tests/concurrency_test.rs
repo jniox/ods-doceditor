@@ -121,7 +121,7 @@ async fn two_concurrent_content_updates_each_leave_a_restorable_version() {
     let doc = document_repo::create_document(
         &pool,
         tenant_id,
-        "Contended document",
+        &common::title("Contended document"),
         user_id,
         serde_json::json!({}),
         "<p>version one</p>",
@@ -221,7 +221,7 @@ async fn an_explicit_snapshot_racing_a_content_update_does_not_collide() {
     let doc = document_repo::create_document(
         &pool,
         tenant_id,
-        "Snapshot race",
+        &common::title("Snapshot race"),
         user_id,
         serde_json::json!({}),
         "<p>version one</p>",
@@ -243,12 +243,13 @@ async fn an_explicit_snapshot_racing_a_content_update_does_not_collide() {
             content: Some("<p>edited while a snapshot was taken</p>"),
         },
     );
+    let snapshot_comment = common::comment("checkpoint before review");
     let snapshot = version_repo::create_version(
         &pool,
         tenant_id,
         doc.id,
         user_id,
-        Some("checkpoint before review"),
+        Some(&snapshot_comment),
         false,
     );
     let release = async {

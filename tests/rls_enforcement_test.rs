@@ -50,7 +50,7 @@ async fn seed(pool: &PgPool, tenant: Uuid) -> Uuid {
     document_repo::create_document(
         pool,
         tenant,
-        "RLS enforcement fixture",
+        &common::title("RLS enforcement fixture"),
         Uuid::new_v4(),
         serde_json::json!({}),
         "<p>body</p>",

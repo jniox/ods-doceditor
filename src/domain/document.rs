@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::text::Title;
+
 /// Valid document status values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -101,9 +103,16 @@ pub struct DocumentVersion {
 /// A struct rather than a row of positional `Option`s: four of them in a row,
 /// three of the same type, is a signature where a caller can silently swap two
 /// arguments and still compile.
+///
+/// `title` is a parsed [`Title`] and not a `&str` on purpose: this struct used
+/// to carry the string the caller sent while the service validated
+/// `title.trim()` beside it, so a 500-character title with a leading space was
+/// accepted here and refused by `VARCHAR(500)` one layer below — a `500` on a
+/// legal rename. A value that is checked and a value that is stored can only
+/// diverge while they are two values. See [`crate::domain::text`].
 #[derive(Debug, Default, Clone)]
 pub struct DocumentUpdate<'a> {
-    pub title: Option<&'a str>,
+    pub title: Option<Title>,
     pub status: Option<&'a str>,
     pub metadata: Option<serde_json::Value>,
     pub content: Option<&'a str>,

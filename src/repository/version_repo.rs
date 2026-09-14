@@ -2,6 +2,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::domain::document::DocumentVersion;
+use crate::domain::text::Comment;
 use crate::error::{AppError, AppResult};
 use crate::repository::tenant_context::begin_tenant_tx;
 
@@ -16,6 +17,9 @@ pub(crate) struct NewVersion<'a> {
     pub content: &'a str,
     pub yjs_snapshot: &'a [u8],
     pub created_by: Uuid,
+    /// Already bounded: the public doors of this module take a parsed
+    /// [`Comment`], and the only `&str` that reaches here is this service's own
+    /// `"initial version"`. `comment` is a `VARCHAR(500)` column.
     pub comment: Option<&'a str>,
     /// `true` when the service took the snapshot itself (creation, content
     /// mutation), `false` when a product explicitly asked for one.
@@ -72,7 +76,7 @@ pub async fn create_version(
     tenant_id: Uuid,
     document_id: Uuid,
     created_by: Uuid,
-    comment: Option<&str>,
+    comment: Option<&Comment>,
     is_auto: bool,
 ) -> AppResult<DocumentVersion> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
@@ -110,7 +114,7 @@ pub async fn create_version(
             content: &content,
             yjs_snapshot: &yjs_snapshot,
             created_by,
-            comment,
+            comment: comment.map(Comment::as_str),
             is_auto,
         },
     )
