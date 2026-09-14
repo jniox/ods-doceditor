@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has nothing code-actionable — six turns running on doceditor — what to do with the turn, the six places the real defects have actually been, and the duty to measure a hypothesis before coding it
+description: When a BA report has nothing code-actionable — seven turns running on doceditor — what to do with the turn, the seven places the real defects have actually been, and the duty to measure a hypothesis before coding it
 metadata:
   type: feedback
 ---
@@ -16,7 +16,7 @@ this order:
    divergence BR-0002 exists to prevent.
 2. **Then go find a defect yourself, by reading a path rather than a report.**
 
-**Why:** measured six turns running on doceditor (lots 5, 6, 7, 8, 9, 10 —
+**Why:** measured seven turns running on doceditor (lots 5, 6, 7, 8, 9, 10, 11 —
 2026-09-13/14). Each report said, in substance, *"no dev cycle needed on the
 code"*. Each turn found something real, and none of it was subtle once looked at:
 
@@ -59,12 +59,26 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   **500 on a legal request**. Lot 9's question ("what quantity is this limit
   applied to?") found a second site the moment it was asked of another field.
 
-**How to apply.** These six are a checklist, not anecdotes: concurrency on the
+- **lot 11 — the thing that refuses the write is not always the code that says
+  "limit".** The GIN index of migration 006 covered `title || ' ' || content`
+  whole; a `tsvector` cannot exceed 1 048 575 bytes of lexemes, so the *index
+  expression* decided whether a document could be **stored**, on a budget set by
+  the text's **vocabulary** rather than its size: 798 893 bytes of distinct
+  reference codes were refused, 10 050 000 bytes of repetitive prose were not,
+  against a published ceiling of 10 MB. Lot 9's question asked of a
+  non-obvious enforcer. And the fix's own second half was only visible by
+  mutation: bounding the index alone **moves** the error to the read, where a
+  bitmap heap scan rechecks the predicate on the heap row. **Ask of every fix:
+  which other layer evaluates this same expression?**
+
+**How to apply.** These seven are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
-configured limit applied to a different quantity from the one it names, and a
-bound whose unit (bytes/characters) differs from the unit its contract and its
-column count in. Also
+configured limit applied to a different quantity from the one it names, a bound
+whose unit (bytes/characters) differs from the unit its contract and its column
+count in, and a **constraint that lives outside the application code entirely**
+— an index expression, a column type, a trigger — refusing what the code
+happily accepts. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
