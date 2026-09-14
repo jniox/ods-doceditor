@@ -415,7 +415,8 @@ mod tests {
     #[actix_web::test]
     async fn configured_brokers_select_the_real_producer() {
         // librdkafka connects lazily, so this builds without a broker running.
-        let producer = producer_from_config(Some("127.0.0.1:9092"), "editor.events");
+        let producer =
+            producer_from_config(Some("127.0.0.1:9092"), crate::config::DEFAULT_EVENT_TOPIC);
         assert_eq!(producer.name(), "redpanda");
     }
 

@@ -450,7 +450,7 @@ now, because either alone leaks: a `RoundTripTopic` guard deletes its topic on
 nothing — and every run first sweeps `doceditor-roundtrip-*` topics older than an
 hour, which is what survives a `kill -9`. The sweep is the reason a saturated
 broker heals on the next run instead of staying red until someone re-derives why;
-it matches on the prefix and the timestamp only, because `editor.events` and the
+it matches on the prefix and the timestamp only, because `editor-events` and the
 cluster's internals live on that same broker. Measured: 9 leftovers → 0, 7/7
 green, and a run now ends with exactly as many topics as it started with.
 
@@ -463,14 +463,32 @@ green, and a run now ends with exactly as many topics as it started with.
   in bytes; the payload ceiling is derived from it, and a malformed or zero
   value now refuses the boot rather than falling back)
 - `REDPANDA_BROKERS` (**unset means events are dropped**, logged at WARN)
-- `REDPANDA_TOPIC` (default: editor.events)
+- `REDPANDA_TOPIC` (default: **editor-events** since spec.md §4.2)
 - `JWT_RSA_PUBLIC_KEY_B64` (base64-encoded RSA PEM, production)
 - `JWT_ALLOW_HS256` (true/false, dev only)
 - `JWT_SECRET` (required when JWT_ALLOW_HS256=true)
 - `JWT_ISSUER`, `JWT_AUDIENCE` (optional)
 
-### Open question, not to be guessed
-The topic name has three values across the sources of truth: `editor.events`
-(this file and the current default), `ods.editor.events` (GTM brief, named four
-times as what products subscribe to) and `{service}-events` (global platform
-rule). Publishing to the wrong one is silent. Escalated, not decided here.
+### The topic name, settled — and the transport, still not
+**The canonical topic is `editor-events`, with `editor-events-dlq` beside it.**
+It had four spellings across four sources and exactly one of them exists as a
+provisioned resource: measured 2026-09-14 08:28 UTC among the 25 topics of
+`orbus-ods-staging`, `editor-events` is there and `editor.events` (this file and
+the old default), `ods.editor.events` (GTM brief, four times) and
+`doceditor-events` (the `{service}-events` rule) are not. It is also that rule
+applied to the name this service already carries everywhere: schema `editor`,
+event source `/editor`, types `com.ods.editor.*`. `doceditor` names the
+deployment; `editor` names the domain, and the domain is what consumers read.
+
+Settled by `~/dev/specs/ods-platform/specs/doceditor/spec.md` §4.2 executing
+HR-20260913-001, and applied here on 2026-09-14: `src/config.rs` defaults to it,
+`.env.example` sets it, ADR-002 records it, `tests/event_topic_test.rs` guards
+it. **That guard is the whole point** — publishing to the wrong topic returns
+`Ok` and fails nothing, which is how this service published four months of
+events into a `NoopProducer`.
+
+**Still open, and not ours to close: the transport.** The code publishes with
+`rdkafka`; the provisioned `editor-events` is a *Pub/Sub* topic and no Redpanda
+broker exists in the staging project. The name is independent of the transport —
+that is why it could be settled first — but replacing the producer is a platform
+decision (spec.md §4.3, deviation D-1).

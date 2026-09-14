@@ -75,7 +75,7 @@ fn unreachable_broker(brokers: &str, topic: &str, error: &str) -> String {
 
 /// The prefix every topic this file creates carries — and the **only** thing
 /// the sweep below is ever allowed to match. The standing broker is shared with
-/// the service's own topic (`editor.events`) and with the cluster's internals;
+/// the service's own topic (`editor-events`) and with the cluster's internals;
 /// a sweep with a looser rule would be far worse than the leak it repairs.
 const TOPIC_PREFIX: &str = "doceditor-roundtrip-";
 

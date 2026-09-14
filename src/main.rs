@@ -127,7 +127,17 @@ async fn main() -> std::io::Result<()> {
 
     // Event producer. A real one whenever REDPANDA_BROKERS says where to publish.
     let producer = producer_from_config(config.redpanda_brokers.as_deref(), &config.redpanda_topic);
-    tracing::info!(producer = producer.name(), "Event producer wired");
+    // The topic is logged because it is the one setting here whose mistakes are
+    // completely silent: publishing to a name nobody consumes returns `Ok` and
+    // fails nothing, which is how this service published four months of events
+    // into a no-op producer. On a deployed instance this line is the only way to
+    // read the effective name without inspecting the bus. Canonical value:
+    // `editor-events` (spec.md §4.2).
+    tracing::info!(
+        producer = producer.name(),
+        topic = %config.redpanda_topic,
+        "Event producer wired"
+    );
 
     // The ceiling on a DOCUMENT. The ceiling on the PAYLOAD that carries one is
     // derived from it (`api::payload`) and is deliberately larger: JSON wraps

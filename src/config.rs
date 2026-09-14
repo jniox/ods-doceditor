@@ -38,6 +38,32 @@ pub const DEFAULT_MAX_DOCUMENT_SIZE_MB: usize = 2;
 /// it was written in (batch 10).
 pub const DEFAULT_MAX_DOCUMENT_BYTES: usize = DEFAULT_MAX_DOCUMENT_SIZE_MB * BYTES_PER_MB;
 
+/// The topic this service publishes to when the deployment names none.
+///
+/// **`editor-events`**, settled by `spec.md` §4.2 in execution of
+/// HR-20260913-001 (option A, it@orbusdigital.com, 2026-09-13: "faire écrire
+/// une spec.md doceditor, **et y fixer le nom du topic**"). It had four
+/// spellings across four sources and only one of them exists as a provisioned
+/// resource — measured 2026-09-14 08:28 UTC among the 25 topics of
+/// `orbus-ods-staging`:
+///
+/// ```text
+/// editor-events (+ editor-events-dlq)  EXISTS — provisioned for this service
+/// editor.events                        does not exist — this default, until now
+/// ods.editor.events                    does not exist — GTM brief, 4 times
+/// doceditor-events                     does not exist — the {service}-events rule
+/// ```
+///
+/// `editor` is the **domain**: the schema is `editor`, the CloudEvents source is
+/// `/editor`, the types are `com.ods.editor.*`. `doceditor` is the name of the
+/// deployment, and consumers read the domain.
+///
+/// Getting this wrong is silent — the producer returns `Ok` and nothing fails,
+/// which is how this service published four months of events into a
+/// `NoopProducer` (ADR-002). `tests/event_topic_test.rs` is the only guard it
+/// has, because the failure mode has no signature.
+pub const DEFAULT_EVENT_TOPIC: &str = "editor-events";
+
 /// Read `MAX_DOCUMENT_SIZE_MB`, refusing a value this service cannot honour
 /// instead of quietly serving a different one.
 ///
@@ -133,7 +159,7 @@ impl AppConfig {
             log_level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
             redpanda_brokers: std::env::var("REDPANDA_BROKERS").ok(),
             redpanda_topic: std::env::var("REDPANDA_TOPIC")
-                .unwrap_or_else(|_| "editor.events".to_string()),
+                .unwrap_or_else(|_| DEFAULT_EVENT_TOPIC.to_string()),
             max_document_size_mb: parse_max_document_size_mb(
                 std::env::var("MAX_DOCUMENT_SIZE_MB").ok().as_deref(),
             )

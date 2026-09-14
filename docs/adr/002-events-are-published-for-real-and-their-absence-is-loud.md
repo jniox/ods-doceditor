@@ -82,11 +82,31 @@ loss for a loud availability loss without being asked.
   That is why the build needs `libcurl4-openssl-dev`, and why CI and the
   Dockerfile must install the same packages — kept so by
   `tests/ci_workflow.rs`.
-- **The topic name is not settled by this ADR, deliberately.** Three sources of
-  truth disagree: `editor.events` (this repository's `CLAUDE.md` and the current
-  default in `src/config.rs`), `ods.editor.events` (the GTM brief, four times,
-  as what products subscribe to) and `doceditor-events` (the platform rule
-  `{service}-events`). Publishing to the wrong one is silent in exactly the way
-  this ADR is about. The code stays on the repository's own default and the
-  question is open as **HR-20260913-001**; whoever resolves it should record the
-  answer here.
+- **The topic name was not settled by this ADR, deliberately — and it is settled
+  now. The answer is `editor-events`** (dead-letter queue `editor-events-dlq`),
+  recorded here as this ADR asked whoever resolved it to do.
+
+  Four spellings existed across four sources: `editor.events` (this repository's
+  `CLAUDE.md` and the default in `src/config.rs` until 2026-09-14),
+  `ods.editor.events` (the GTM brief, four times, as what products subscribe
+  to), `doceditor-events` (the platform rule `{service}-events`) and
+  `editor-events`. Measured on 2026-09-14 at 08:28 UTC among the 25 topics of
+  `orbus-ods-staging`, **only `editor-events` exists as a provisioned
+  resource** — it is already this service's topic. It is also the platform rule
+  applied to the name this service carries everywhere else: the schema is
+  `editor`, the source of these events is `/editor`, their types are
+  `com.ods.editor.*`. `doceditor` names the deployment; `editor` names the
+  domain, and the domain is what a consumer reads in `ce_type`.
+
+  Settled by `~/dev/specs/ods-platform/specs/doceditor/spec.md` §4.2, in
+  execution of **HR-20260913-001** (option A, it@orbusdigital.com), and applied
+  to `src/config.rs` on 2026-09-14. `tests/event_topic_test.rs` guards it,
+  because publishing to the wrong topic is silent in exactly the way this ADR is
+  about and nothing else would fail.
+
+- **Still not settled: the transport.** The code publishes with `rdkafka`; the
+  provisioned resource is Cloud Pub/Sub, and no Redpanda broker exists in the
+  staging project. `editor-events` is the name either way — that is why it could
+  be settled first — but what replaces the `rdkafka` producer, and how the
+  binary-content `ce_*` headers become Pub/Sub message attributes, is a platform
+  decision (spec.md §4.3, deviation D-1).
