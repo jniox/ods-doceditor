@@ -8,6 +8,43 @@ use crate::error::{AppError, AppResult};
 use crate::repository::tenant_context::begin_tenant_tx;
 use crate::repository::version_repo::{insert_version, NewVersion};
 
+/// How much of a document PostgreSQL is asked to index for full-text search.
+///
+/// Not a performance knob: a `tsvector` cannot hold more than 1 048 575 bytes
+/// of lexemes, and an index expression that raises makes the **write** raise.
+/// Until migration 009 the index covered `title || ' ' || content` whole, so
+/// whether a document could be stored at all depended on the *vocabulary* of
+/// its body rather than on its size — measured on PostgreSQL 17: a body of
+/// 798 893 bytes of distinct reference codes was refused while 10 050 000 bytes
+/// of ordinary repetitive prose went in. `MAX_DOCUMENT_SIZE_MB` says 10 MB.
+///
+/// Characters and not bytes, because PostgreSQL's `left()` counts characters.
+/// The worst case measured for this value — 250 000 characters of distinct
+/// accented tokens — produces 576 628 bytes of `tsvector`, a little over half
+/// the hard limit. See `tests/search_index_test.rs`, which re-measures it in
+/// three alphabets rather than trusting this paragraph.
+pub const INDEXED_PREFIX_CHARS: usize = 250_000;
+
+/// The searchable projection of a document, named once.
+///
+/// Migration 009 defines `editor.searchable_text(title, content)` as the first
+/// [`INDEXED_PREFIX_CHARS`] characters of the title followed by the body, and
+/// builds the GIN index on it. The predicate below goes through the same
+/// function, which is what makes the two agree: an inlined copy would still
+/// answer, but it would stop matching the index — and a sequential scan would
+/// then evaluate `to_tsvector` over the untruncated body and raise, on a read,
+/// the error this batch removed from the write.
+pub const SEARCHABLE_TEXT: &str = "editor.searchable_text(title, content)";
+
+/// The full-text predicate, built in one place so the tests measure the same
+/// SQL the service sends.
+pub fn search_predicate(param_placeholder: &str) -> String {
+    format!(
+        "to_tsvector('english', {SEARCHABLE_TEXT}) @@ \
+         plainto_tsquery('english', {param_placeholder})"
+    )
+}
+
 /// Full document projection, body included.
 const DOC_COLUMNS: &str = "id, tenant_id, title, status, created_by, created_at, updated_at, \
                            deleted_at, current_version, word_count, metadata, content";
@@ -155,9 +192,13 @@ fn build_list_query(
     }
 
     if let Some(q) = search {
-        // The body is searchable too, now that there is one.
+        // The body is searchable too, now that there is one — through the same
+        // named projection the index is built on (migration 009). Inlining
+        // `title || ' ' || content` here is what used to make a large document
+        // unstorable, and would now make a large document unsearchable-by-500.
         sql.push_str(&format!(
-            " AND to_tsvector('english', title || ' ' || content) @@ plainto_tsquery('english', ${param_idx})"
+            " AND {}",
+            search_predicate(&format!("${param_idx}"))
         ));
         args.push(q.to_string());
         // param_idx += 1; // not needed further but included for correctness

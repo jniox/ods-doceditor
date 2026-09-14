@@ -127,6 +127,39 @@ first does not exist. A limit tested at the layer that enforces it, from a
 vantage point the caller never occupies, is green in the suite and wrong on the
 wire. See `tests/size_limit_test.rs`.
 
+## A third ceiling, on the index and not on the document
+**Full-text search covers the first 250 000 characters of a document; the
+document itself is stored whole, at any size `MAX_DOCUMENT_SIZE_MB` admits.**
+A PostgreSQL `tsvector` cannot exceed 1 048 575 bytes of lexemes, and migration
+006 indexed `title || ' ' || content` entire — so the index expression, which is
+evaluated on every insert and update, decided whether a row could be **stored**.
+What fills that budget is the *vocabulary* of the text, not its length: measured
+on PostgreSQL 17, a body of **798 893 bytes** of distinct reference codes was
+refused (`string is too long for tsvector`) while **10 050 000 bytes** of
+ordinary repetitive prose went in. A pasted export or a generated appendix of
+1 MB therefore answered `500 {"error":"internal_error"}` on a request that broke
+no published rule, against a documented ceiling of 10 MB. The third limit in
+three batches to be applied to a different quantity from the one its name
+promises — after the payload/body split above and the byte/character bound
+before it.
+
+Migration 009 names the searchable projection once —
+`editor.searchable_text(title, content)`, the first `INDEXED_PREFIX_CHARS`
+characters of the title followed by the body — and builds the GIN index on it.
+**`document_repo` sends that same function, through `search_predicate()`, and
+that is load-bearing rather than tidy**: truncating only the index moves the
+failure to the read, where a bitmap heap scan rechecks the condition on the heap
+row and raises the identical error on `GET /documents?search=…` for every tenant
+owning one large document. Anything that touches full-text search here goes
+through that one function; it does not inline `title || ' ' || content` again.
+
+250 000 is measured, not chosen: `left()` counts characters while the limit
+counts bytes of lexemes, so the worst case (distinct accented tokens) was
+measured at 576 628 bytes — half the limit — and 900 000 characters overflows.
+See ADR-006 and `tests/search_index_test.rs`, which asks the question in three
+alphabets, forces the sequential-scan plan the index would otherwise hide, and
+fails if the code's bound and the migration's ever diverge.
+
 ## Content and versions
 A document carries a `content` body (HTML/Markdown/JSON — the product brings its
 own editor, DocEditor owns the storage and the history). Creation writes

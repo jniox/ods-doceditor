@@ -200,7 +200,16 @@ paths:
         - name: search
           in: query
           required: false
-          description: Full-text search over the title and the body.
+          description: |
+            Full-text search over the title and the body.
+
+            Matching covers the **first 250 000 characters** of a document —
+            the title, then the beginning of the body. A larger document is
+            still stored, served and versioned whole; only the tail of its body
+            is outside the index. PostgreSQL cannot index more than that in one
+            `tsvector`, and indexing the whole body made documents above
+            roughly 0.8 MB of varied text impossible to create at all. See
+            ADR-006.
           schema: { type: string }
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/SourceService"
