@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has nothing code-actionable — eight turns running on doceditor — what to do with the turn, the seven places the real defects have actually been, and the duty to measure a hypothesis before coding it
+description: When a BA report has little or nothing code-actionable — nine turns running on doceditor — what to do with the turn, the nine places the real defects have actually been, and the duty to measure a hypothesis before coding it
 metadata:
   type: feedback
 ---
@@ -85,14 +85,37 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   complement — **ask not only what an endpoint returns but what it had to read
   to return it**, because a correct answer can be produced at unbounded cost.
 
-**How to apply.** These eight are a checklist, not anecdotes: concurrency on the
+- **lot 13 — a rule stated about one shape of input, and a constant quoting the
+  rule as if it held.** `metadata` string values are bounded "at most 256
+  characters"; the check was `if let Some(s) = value.as_str()`, so wrapping the
+  same string in `{}` or `[]` stored **5 MB** in that field. Nothing bounded the
+  object as a whole either, and `DocumentSummary` keeps `metadata` while
+  deliberately dropping `content` — so a page multiplied it by a hundred:
+  **300 MB and 945 MiB of RSS against a 512 MiB instance**, from 30 ordinary
+  `201`s. Two compounding lessons. First, **ask a validation rule which shapes of
+  input it is silent about** — this was the third instance in one repo of "a
+  check that says nothing about the inputs it was not shaped for is not a check",
+  and the first two were at depth 0. Second, **a test that restates a rule
+  instead of exercising it confirms the author, not the code**: the constant
+  `ENVELOPE_ALLOWANCE_BYTES` was documented as covering "the largest envelope
+  this service's own validation admits — under 7 KiB" and its unit test computed
+  that envelope from the prose and compared it to the constant. Green, while the
+  service admitted three hundred times the number. The durable half of the fix is
+  that the test now reads the constants the code *enforces*.
+  And when the repair needed a number no spec provided: **look for one the
+  codebase already asserts** (here, the allowance the payload ceiling was already
+  computed from) before inventing one — that is what separates a repair from a
+  product decision you are not allowed to make.
+
+**How to apply.** These nine are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
 whose unit (bytes/characters) differs from the unit its contract and its column
 count in, and a **constraint that lives outside the application code entirely**
 — an index expression, a column type, a trigger — refusing what the code
-happily accepts. Also
+happily accepts, and a rule whose check is silent about every shape of input it
+was not written for. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
