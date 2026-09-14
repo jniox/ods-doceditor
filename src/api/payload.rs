@@ -37,8 +37,8 @@
 //! first is invisible, which is exactly how a limit can be green in the suite
 //! and wrong in production.
 
-use actix_web::error::JsonPayloadError;
-use actix_web::web;
+use actix_web::error::{JsonPayloadError, PathError, QueryPayloadError};
+use actix_web::{web, HttpResponse};
 
 use crate::error::AppError;
 
@@ -119,15 +119,75 @@ pub fn payload_config(body_ceiling: usize) -> web::PayloadConfig {
     web::PayloadConfig::default().limit(payload_ceiling(body_ceiling))
 }
 
-/// Install both ceilings on an application.
+/// The path extractor, answering in the service's error shape.
+///
+/// The status does not change — actix already answers `404` for a path it
+/// cannot deserialise, and `404` is right: a path that cannot name a resource
+/// names no resource, which is also what AC-028 requires of an id belonging to
+/// another tenant. What changes is the body. Measured before this existed:
+/// `GET /api/v1/documents/not-a-uuid` answered
+/// ``404 text/plain "UUID parsing failed: invalid character: found `n` at 1"``,
+/// and `…/versions/abc` answered `404 text/plain "can not parse \"abc\" to a
+/// i32"` — two bodies a client parsing `{"error": …}` cannot read.
+pub fn path_config() -> web::PathConfig {
+    web::PathConfig::default().error_handler(|err: PathError, _req| {
+        AppError::NotFound(format!(
+            "No resource matches this path: {}",
+            strip_prefix(&err.to_string(), "Path deserialize error: ")
+        ))
+        .into()
+    })
+}
+
+/// The query extractor, answering in the service's error shape.
+///
+/// `GET /api/v1/documents` no longer reaches this handler — its four parameters
+/// arrive as strings and are parsed by [`crate::domain::query`] and
+/// [`crate::domain::pagination::Pagination::parse`], which name the parameter
+/// at fault. It is installed all the same, so the *next* typed query parameter
+/// cannot reintroduce `400 text/plain` by being written the obvious way.
+pub fn query_config() -> web::QueryConfig {
+    web::QueryConfig::default().error_handler(|err: QueryPayloadError, _req| {
+        AppError::BadRequest(format!(
+            "Invalid query string: {}",
+            strip_prefix(&err.to_string(), "Query deserialize error: ")
+        ))
+        .into()
+    })
+}
+
+fn strip_prefix<'a>(message: &'a str, prefix: &str) -> &'a str {
+    message.strip_prefix(prefix).unwrap_or(message)
+}
+
+/// Install every refusal the boundary itself can make.
 ///
 /// One call, used by `main.rs` and by the tests, so the bench cannot be wired
 /// differently from production — which is the defect this module exists to
-/// close, not merely a tidiness.
+/// close, not merely a tidiness. It now covers the two ceilings **and** the
+/// shape every boundary refusal answers in: the JSON body, the path, the query
+/// string, and a request that matches no route at all.
+///
+/// They belong to one call because they are one promise. `docs/openapi.yaml`
+/// publishes exactly one error shape and AC-031 says its enumeration is exact;
+/// an extractor wired without its error handler silently exempts itself from
+/// that, and nothing goes red — which is how `413`/`400` stayed `text/plain`
+/// for the JSON body until 2026-09-14 and how the path and the query string
+/// stayed `text/plain` until this batch.
 pub fn limits(body_ceiling: usize) -> impl Fn(&mut web::ServiceConfig) + Clone {
     move |cfg: &mut web::ServiceConfig| {
         cfg.app_data(json_config(body_ceiling));
         cfg.app_data(payload_config(body_ceiling));
+        cfg.app_data(path_config());
+        cfg.app_data(query_config());
+        // A request matching no route: actix answers `404` with no body and no
+        // content type whatsoever, which is the last non-JSON answer this
+        // service puts on the wire. The status is unchanged; only the shape is.
+        cfg.default_service(web::to(|| async {
+            Err::<HttpResponse, AppError>(AppError::NotFound(
+                "No route matches this request".to_string(),
+            ))
+        }));
     }
 }
 

@@ -6,6 +6,7 @@ use crate::api::extractors::AuthUser;
 use crate::domain::document::DocumentUpdate;
 use crate::domain::metadata::Metadata;
 use crate::domain::pagination::Pagination;
+use crate::domain::query::supplied;
 use crate::domain::text::Title;
 use crate::error::AppError;
 use crate::service::document_service::DocumentService;
@@ -30,10 +31,22 @@ pub struct UpdateDocumentRequest {
     pub content: Option<String>,
 }
 
+/// The query string exactly as it arrived: four strings, typed by nobody.
+///
+/// `page` and `per_page` were `Option<i64>` until 2026-09-14, which reads like
+/// a convenience and is a delegation: `serde` then decided what a malformed
+/// page was, and answered it from a layer this service does not write —
+/// `400 text/plain`, "invalid digit found in string", outside the closed
+/// enumeration `docs/openapi.yaml` publishes. It also made `?page=` — a form
+/// field nobody typed into — indistinguishable from a typo.
+///
+/// Strings here, values built below: the same move as `title`, `metadata` and
+/// the page itself. See [`crate::domain::query`] and
+/// `tests/query_contract_test.rs`.
 #[derive(Debug, Deserialize)]
 pub struct ListDocumentsQuery {
-    pub page: Option<i64>,
-    pub per_page: Option<i64>,
+    pub page: Option<String>,
+    pub per_page: Option<String>,
     pub status: Option<String>,
     pub search: Option<String>,
 }
@@ -78,19 +91,25 @@ pub async fn create_document(
 /// walks `0, 1, 2` and reads the first page twice. Building the `Pagination`
 /// here and rendering the response from that same value leaves no second number
 /// in scope to report by mistake.
+///
+/// The four parameters are read through [`supplied`], so *the field was left
+/// empty* is one gesture with one answer — the parameter was not supplied —
+/// instead of the four it used to have: `400 text/plain` for `page` and
+/// `per_page`, `400 application/json` for `status`, and, worst of the four
+/// because it is silent, `200` with an empty page for `search`.
 pub async fn list_documents(
     auth: AuthUser,
     svc: web::Data<DocumentService>,
     query: web::Query<ListDocumentsQuery>,
 ) -> Result<HttpResponse, AppError> {
-    let pagination = Pagination::new(query.page, query.per_page);
+    let pagination = Pagination::parse(query.page.as_deref(), query.per_page.as_deref())?;
 
     let (docs, total) = svc
         .list_documents(
             auth.tenant_id,
             pagination,
-            query.status.as_deref(),
-            query.search.as_deref(),
+            supplied(query.status.as_deref()),
+            supplied(query.search.as_deref()),
         )
         .await?;
 

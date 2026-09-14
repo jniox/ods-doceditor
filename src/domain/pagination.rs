@@ -17,6 +17,25 @@
 
 use serde::Serialize;
 
+use crate::domain::query::supplied;
+use crate::error::{AppError, AppResult};
+
+/// One pagination parameter, read from the query string.
+///
+/// Absent or blank is `None` — the documented default follows. Anything else
+/// must be a whole number, and a refusal names the parameter the caller has to
+/// fix, which `"invalid digit found in string"` never did.
+fn whole_number(name: &str, raw: Option<&str>) -> AppResult<Option<i64>> {
+    let Some(value) = supplied(raw) else {
+        return Ok(None);
+    };
+    value.parse::<i64>().map(Some).map_err(|_| {
+        AppError::BadRequest(format!(
+            "Query parameter `{name}` must be a whole number; got {value:?}"
+        ))
+    })
+}
+
 /// A normalised page request: what the server will actually serve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Pagination {
@@ -48,6 +67,29 @@ impl Pagination {
         }
     }
 
+    /// Build a page from the query string as it arrived — strings, not
+    /// integers.
+    ///
+    /// The boundary used to let `serde` type these two parameters, which put
+    /// the *decision* about a malformed page in a layer this service does not
+    /// write: `?page=abc` was refused by the framework, in the framework's
+    /// shape (`400 text/plain`), before any code here ran, and `?page=` — a
+    /// form field nobody typed into — was refused in the same breath as a
+    /// genuine typo. Parsing here restores both: what is blank is
+    /// [`supplied`](crate::domain::query::supplied)'s business, what is
+    /// malformed is refused in this service's own error shape, naming the
+    /// parameter rather than the serde error.
+    ///
+    /// A value that parses is then normalised exactly as before — out of range
+    /// is the nearest page in range, never an error. See
+    /// `tests/query_contract_test.rs`.
+    pub fn parse(page: Option<&str>, per_page: Option<&str>) -> AppResult<Self> {
+        Ok(Self::new(
+            whole_number("page", page)?,
+            whole_number("per_page", per_page)?,
+        ))
+    }
+
     pub fn page(&self) -> i64 {
         self.page
     }
@@ -71,6 +113,7 @@ impl Pagination {
 #[cfg(test)]
 mod tests {
     use super::Pagination;
+    use crate::error::AppError;
 
     #[test]
     fn ordinary_pages_are_plain_arithmetic() {
@@ -105,5 +148,68 @@ mod tests {
     fn absent_input_means_the_documented_defaults() {
         let p = Pagination::new(None, None);
         assert_eq!((p.page(), p.per_page(), p.offset()), (1, 20, 0));
+    }
+
+    #[test]
+    fn a_blank_parameter_means_the_documented_defaults_too() {
+        for (page, per_page) in [
+            (None, None),
+            (Some(""), Some("")),
+            (Some("  "), Some("\t")),
+            (Some(""), None),
+        ] {
+            let p = Pagination::parse(page, per_page).expect("a blank page is not a malformed one");
+            assert_eq!(
+                (p.page(), p.per_page()),
+                (1, 20),
+                "page={page:?} per_page={per_page:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_supplied_number_is_parsed_then_normalised_exactly_as_before() {
+        let p = Pagination::parse(Some("3"), Some("20")).unwrap();
+        assert_eq!((p.page(), p.per_page(), p.offset()), (3, 20, 40));
+
+        let clamped = Pagination::parse(Some("0"), Some("1000")).unwrap();
+        assert_eq!((clamped.page(), clamped.per_page()), (1, 100));
+    }
+
+    /// A padded number is refused, exactly as it was before this function
+    /// existed.
+    ///
+    /// [`supplied`](crate::domain::query::supplied) decides *blankness* after
+    /// trimming and hands on what the caller sent, so `%2020%20` is still not a
+    /// number. Laundering it here would be the same gesture as trimming
+    /// `?status=published%20` into a valid status, which the list contract
+    /// refuses on purpose.
+    #[test]
+    fn a_padded_number_is_still_not_a_number() {
+        assert!(Pagination::parse(Some(" 20 "), None).is_err());
+        assert!(Pagination::parse(None, Some("20 ")).is_err());
+    }
+
+    #[test]
+    fn a_malformed_number_names_the_parameter_it_could_not_read() {
+        for (page, per_page, expected) in [
+            (Some("abc"), None, "page"),
+            (Some("5.5"), None, "page"),
+            (None, Some("-"), "per_page"),
+            // Wider than an i64: a number, but not one this service can hold.
+            (Some("99999999999999999999"), None, "page"),
+        ] {
+            let err = Pagination::parse(page, per_page)
+                .expect_err("page={page:?} per_page={per_page:?} is not readable");
+            let message = err.to_string();
+            assert!(
+                message.contains(expected),
+                "the refusal must name the parameter to fix, got {message:?}"
+            );
+            assert!(
+                matches!(err, AppError::BadRequest(_)),
+                "an unreadable query parameter is the caller's to fix: {err:?}"
+            );
+        }
     }
 }
