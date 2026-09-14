@@ -125,17 +125,23 @@ async fn main() -> std::io::Result<()> {
     // the role the requests will really run as.
     tenant_context::log_rls_posture(&pool).await;
 
-    // Event producer. A real one whenever REDPANDA_BROKERS says where to publish.
-    let producer = producer_from_config(config.redpanda_brokers.as_deref(), &config.redpanda_topic);
-    // The topic is logged because it is the one setting here whose mistakes are
-    // completely silent: publishing to a name nobody consumes returns `Ok` and
-    // fails nothing, which is how this service published four months of events
-    // into a no-op producer. On a deployed instance this line is the only way to
-    // read the effective name without inspecting the bus. Canonical value:
-    // `editor-events` (spec.md §4.2).
+    // Event producer. The transport was chosen and validated while the
+    // configuration was read (`config::select_event_bus`), so a deployment that
+    // asks for a bus it cannot reach has already stopped the boot by here.
+    let producer = producer_from_config(&config.event_bus);
+    // The transport and the topic are logged because they are the settings here
+    // whose mistakes are completely silent: publishing to a name nobody
+    // consumes — or to no bus at all — returns `Ok` and fails nothing, which is
+    // how this service published four months of events into a no-op producer.
+    // On a deployed instance these lines are the only way to read the effective
+    // values without inspecting the bus. Canonical topic: `editor-events`
+    // (spec.md §4.2); canonical transport: Pub/Sub (HR-20260914-007, ADR-011).
     tracing::info!(
         producer = producer.name(),
-        topic = %config.redpanda_topic,
+        topic = config
+            .event_bus
+            .topic()
+            .unwrap_or("<none: events are dropped>"),
         "Event producer wired"
     );
 

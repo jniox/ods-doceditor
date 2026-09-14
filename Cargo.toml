@@ -36,6 +36,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 regex-lite = "0.1"
+# The Pub/Sub publisher talks REST, not gRPC, and that is a dependency decision
+# rather than a style: every gRPC client for Pub/Sub pulls `tonic` and therefore
+# `h2`, the crate this repository is under a platform-wide decision to keep out
+# of its shipped graph (HR-20260909-001, RUSTSEC-2026-0258). `default-features
+# = false` drops reqwest's own `http2` feature for the same reason; `rustls-tls`
+# is the TLS backend sqlx already brings, so nothing new is linked for it, and
+# `charset`/`http2` stay off. See ADR-011 and tests/framework.rs.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [features]
 default = []

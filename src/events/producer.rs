@@ -148,33 +148,60 @@ pub struct KafkaRecord {
     pub headers: Vec<(String, String)>,
 }
 
+/// The CloudEvents attributes of an event, under their **unprefixed** spec
+/// names, in the order a binding writes them.
+///
+/// One source, because there are now two bindings of the same envelope: Kafka
+/// headers prefix these with `ce_`, Pub/Sub message attributes with `ce-`. Two
+/// hand-written lists drift the first time an attribute is added to one of
+/// them, and an envelope missing an attribute fails nothing — the bus accepts
+/// it and a consumer quietly reads `None`. Same shape as `version_repo`'s two
+/// column lists and `document_repo::search_predicate`: one definition, several
+/// renderings. `tests/pubsub_transport_test.rs` holds the two against each
+/// other.
+///
+/// `datacontenttype` is deliberately not here: both bindings carry it under the
+/// transport's own name (`content-type`) rather than as a `ce_`/`ce-`
+/// attribute, which is what the CloudEvents binary content mode prescribes.
+pub fn cloudevent_attributes(event: &CloudEvent) -> Vec<(&'static str, String)> {
+    let mut attributes = vec![
+        ("specversion", event.specversion.clone()),
+        ("id", event.id.clone()),
+        ("source", event.source.clone()),
+        ("type", event.event_type.clone()),
+        ("time", event.time.to_rfc3339()),
+        ("tenantid", event.tenantid.clone()),
+    ];
+    if let Some(correlation_id) = &event.correlationid {
+        attributes.push(("correlationid", correlation_id.clone()));
+    }
+    attributes
+}
+
+/// The value that keeps one document's events in order, whatever the transport
+/// calls it: a Kafka partition key, a Pub/Sub ordering key.
+pub fn partition_key(event: &CloudEvent) -> String {
+    event
+        .data
+        .get("document_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&event.id)
+        .to_string()
+}
+
 /// CloudEvents v1.0 *binary* content mode for Kafka: the attributes travel as
 /// `ce_*` message headers and the body carries the event data. This is what
 /// the platform rule "CloudEvents v1.0 in message attributes" means on a
 /// broker that has headers rather than attributes.
 pub fn kafka_record(event: &CloudEvent) -> KafkaRecord {
-    let key = event
-        .data
-        .get("document_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&event.id)
-        .to_string();
-
-    let mut headers = vec![
-        ("ce_specversion".to_string(), event.specversion.clone()),
-        ("ce_id".to_string(), event.id.clone()),
-        ("ce_source".to_string(), event.source.clone()),
-        ("ce_type".to_string(), event.event_type.clone()),
-        ("ce_time".to_string(), event.time.to_rfc3339()),
-        ("ce_tenantid".to_string(), event.tenantid.clone()),
-        ("content-type".to_string(), event.datacontenttype.clone()),
-    ];
-    if let Some(correlation_id) = &event.correlationid {
-        headers.push(("ce_correlationid".to_string(), correlation_id.clone()));
-    }
+    let mut headers: Vec<(String, String)> = cloudevent_attributes(event)
+        .into_iter()
+        .map(|(name, value)| (format!("ce_{name}"), value))
+        .collect();
+    headers.push(("content-type".to_string(), event.datacontenttype.clone()));
 
     KafkaRecord {
-        key,
+        key: partition_key(event),
         payload: event.data.to_string(),
         headers,
     }
@@ -220,16 +247,16 @@ impl EventProducer for InMemoryProducer {
 
 /// No-op producer when no broker is configured.
 ///
-/// It must stay reachable only through an explicit absence of `REDPANDA_BROKERS`:
-/// wiring it unconditionally is how this service spent four months building
-/// correct CloudEvents and delivering none of them.
+/// It must stay reachable only through an explicit absence of any bus
+/// configuration: wiring it unconditionally is how this service spent four
+/// months building correct CloudEvents and delivering none of them.
 pub struct NoopProducer;
 
 impl EventProducer for NoopProducer {
     fn publish(&self, event: CloudEvent) -> Result<(), String> {
         tracing::debug!(
             event_type = %event.event_type,
-            "Event dropped: no broker configured (REDPANDA_BROKERS unset)"
+            "Event dropped: no event bus configured (EVENT_BUS/REDPANDA_BROKERS unset)"
         );
         Ok(())
     }
@@ -314,15 +341,23 @@ impl EventProducer for RedpandaProducer {
     }
 }
 
-/// Choose the producer from configuration.
+/// Build the producer the configuration selected.
 ///
-/// The no-op producer is a deliberate fallback for local development, never a
-/// default: when `REDPANDA_BROKERS` is absent the service says so at WARN, so
-/// a missing broker in a deployed environment is visible in the first ten lines
-/// of the logs instead of being discovered by an empty analytics pipeline.
-pub fn producer_from_config(brokers: Option<&str>, topic: &str) -> Arc<dyn EventProducer> {
-    match brokers.map(str::trim).filter(|b| !b.is_empty()) {
-        Some(brokers) => match RedpandaProducer::new(brokers, topic) {
+/// The selection itself lives in `config::select_event_bus`, which is a pure
+/// function over the environment and refuses a choice it cannot honour: an
+/// operator who writes `EVENT_BUS=pubsub` without `GCP_PROJECT_ID` stops the
+/// boot rather than being served a producer that drops everything. That matters
+/// more here than anywhere else in this service, because a dropped event has
+/// **no failure signature at all** — the trait returns `Ok`, the callers check
+/// it, and four months pass (ADR-002).
+///
+/// The no-op producer is therefore reachable only through a deliberate absence
+/// of any bus configuration, and it says so at WARN.
+pub fn producer_from_config(bus: &crate::config::EventBus) -> Arc<dyn EventProducer> {
+    use crate::config::EventBus;
+
+    match bus {
+        EventBus::Redpanda { brokers, topic } => match RedpandaProducer::new(brokers, topic) {
             Ok(producer) => {
                 tracing::info!(brokers, topic, "Publishing events to Redpanda");
                 Arc::new(producer)
@@ -334,9 +369,43 @@ pub fn producer_from_config(brokers: Option<&str>, topic: &str) -> Arc<dyn Event
                 Arc::new(NoopProducer)
             }
         },
-        None => {
+        EventBus::PubSub { project_id, topic } => {
+            let endpoints = crate::events::pubsub::endpoints_from_env(
+                std::env::var(crate::events::pubsub::EMULATOR_HOST_VAR)
+                    .ok()
+                    .as_deref(),
+                std::env::var(crate::events::pubsub::METADATA_HOST_VAR)
+                    .ok()
+                    .as_deref(),
+            );
+            match crate::events::pubsub::PubSubProducer::new(project_id, topic, endpoints) {
+                Ok(producer) => {
+                    tracing::info!(
+                        project_id,
+                        topic,
+                        publish_url = producer.publish_url(),
+                        "Publishing events to Cloud Pub/Sub"
+                    );
+                    Arc::new(producer)
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Could not build the Pub/Sub producer ({e}); events will be dropped"
+                    );
+                    Arc::new(NoopProducer)
+                }
+            }
+        }
+        EventBus::Disabled => {
+            // Deliberately does not name *which* variable is missing: this
+            // arm is reached both by an empty environment and by an explicit
+            // `EVENT_BUS=none`, and a startup line that states a false cause is
+            // the thing this repository keeps having to unpick. What is
+            // asserted is the consequence, and the remedy.
             tracing::warn!(
-                "REDPANDA_BROKERS is not set: document events will be DROPPED, not published"
+                "No event bus is selected: document events will be DROPPED, not published. \
+                 Set EVENT_BUS=pubsub with GCP_PROJECT_ID (staging), or REDPANDA_BROKERS \
+                 (local broker), to publish."
             );
             Arc::new(NoopProducer)
         }
@@ -415,16 +484,27 @@ mod tests {
     #[actix_web::test]
     async fn configured_brokers_select_the_real_producer() {
         // librdkafka connects lazily, so this builds without a broker running.
-        let producer =
-            producer_from_config(Some("127.0.0.1:9092"), crate::config::DEFAULT_EVENT_TOPIC);
+        let producer = producer_from_config(&crate::config::EventBus::Redpanda {
+            brokers: "127.0.0.1:9092".to_string(),
+            topic: crate::config::DEFAULT_EVENT_TOPIC.to_string(),
+        });
         assert_eq!(producer.name(), "redpanda");
     }
 
+    /// The transport the deployment chose (HR-20260914-007, option A).
     #[actix_web::test]
-    async fn absent_or_blank_brokers_fall_back_to_the_noop_producer() {
-        assert_eq!(producer_from_config(None, "editor.events").name(), "noop");
+    async fn a_pubsub_bus_selects_the_pubsub_producer() {
+        let producer = producer_from_config(&crate::config::EventBus::PubSub {
+            project_id: "orbus-ods-staging".to_string(),
+            topic: crate::config::DEFAULT_EVENT_TOPIC.to_string(),
+        });
+        assert_eq!(producer.name(), "pubsub");
+    }
+
+    #[actix_web::test]
+    async fn no_configured_bus_falls_back_to_the_noop_producer() {
         assert_eq!(
-            producer_from_config(Some("  "), "editor.events").name(),
+            producer_from_config(&crate::config::EventBus::Disabled).name(),
             "noop"
         );
     }
