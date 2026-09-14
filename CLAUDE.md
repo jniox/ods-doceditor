@@ -85,10 +85,28 @@ it — do not "fix" it by guessing; it is reported, not resolved.
 - All queries include explicit `tenant_id` filter (defense-in-depth)
 - RLS is `ENABLE`d **and** `FORCE`d on every table (migration 007); policies use
   the missing_ok form of `current_setting` and carry a `WITH CHECK`.
-- **A SUPERUSER or BYPASSRLS role still bypasses all of it.** `ods` on the dev
-  instance is both, so RLS is inert there and isolation rests on the tenant
-  predicates. The service measures this at startup and logs a WARN naming the
-  role. Deploy with a non-superuser role without BYPASSRLS.
+- **A SUPERUSER or BYPASSRLS role bypasses all of that — so the service does not
+  run as one.** `ods` (the role in `DATABASE_URL` here and on CI) is both, and
+  for seven review cycles that made the policies decorative. It no longer does:
+  PostgreSQL evaluates policies against the **effective** role, so migration 008
+  provisions `editor_app` (NOLOGIN, unprivileged) and the serving pool runs
+  `SET ROLE editor_app` on **every connection**. Boot says which posture is live:
+  `INFO … enforced … role=editor_app session_role=ods`. Measured: an unscoped
+  `SELECT` sees 1278 rows as `ods` and **0** as `editor_app`. See ADR-005.
+- Two pools, and the split is not cosmetic. The **boot** pool keeps the
+  connection string's privileges — it creates the schema, runs the migrations,
+  probes the role — then closes. The **serving** pool drops into `editor_app`.
+  Anything administrative belongs on the first; a request never does.
+- `tests/common::setup_test_pool` is wired like the serving pool, runtime role
+  included, so the whole suite runs under enforced RLS. Use `setup_admin_pool`
+  for DDL and for fixtures that model an operator. Seeding a **platform**
+  template (`tenant_id IS NULL`) is refused by the `WITH CHECK` on purpose and
+  escalates with `SET LOCAL ROLE NONE`; a tenant's own template is written under
+  its own context.
+- Pointing `DATABASE_URL` at a plain LOGIN role that is neither SUPERUSER nor
+  BYPASSRLS remains **better** — it removes the privileges from the connection
+  string, so nothing can `RESET ROLE` back to them. It is no longer a
+  prerequisite for the control to exist.
 - All events include tenant_id, and the correlation id of their request.
 
 ## Observability
@@ -124,6 +142,22 @@ have each cost a work unit:
 ## Migrations
 All migrations are idempotent (CREATE TABLE IF NOT EXISTS, CREATE INDEX IF NOT EXISTS).
 This is required because the dev DB is shared across services.
+
+**`sqlx::migrate!` embeds the directory at COMPILE time, and adding a new file
+does not by itself invalidate the build.** A brand-new migration therefore looks
+like it "did not run": the binary still carries the previous set, `_sqlx_migrations`
+stops at the old version, and the tests that need it fail while the SQL on disk
+is perfectly correct. Touch a file that uses the macro (`src/main.rs`,
+`tests/common/mod.rs`) — or `cargo clean -p ods-doceditor` — before concluding
+anything about a migration you just wrote. Cost the first 20 minutes of the
+migration-008 batch; CI never sees it because CI always builds from scratch.
+
+Migration 008 also creates a **role**, which is cluster-wide while sqlx's
+migration lock is per-database — so its `IF NOT EXISTS` catches `duplicate_object`
+as well, the same race `CREATE SCHEMA IF NOT EXISTS` has (see
+`src/repository/schema.rs`). Every step of it also catches `insufficient_privilege`
+and downgrades to a WARNING: a database whose admin role lacks `CREATEROLE` must
+still migrate and still boot.
 
 ## Tests
 ```bash

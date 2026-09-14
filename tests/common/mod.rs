@@ -19,6 +19,9 @@
 //!    threads start together -- invisible here, fatal on CI's fresh database.
 #![allow(dead_code)]
 
+use ods_doceditor::repository::tenant_context::{
+    begin_tenant_tx, runtime_role_is_adoptable, session_setup,
+};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Executor;
 use uuid::Uuid;
@@ -38,16 +41,24 @@ pub fn database_url() -> String {
     })
 }
 
-/// Connect, ensure the `editor` schema exists, run the (idempotent) migrations.
-pub async fn setup_test_pool() -> sqlx::PgPool {
+/// The **administrative** pool: `search_path` only, no role adoption.
+///
+/// Creating the schema, running migrations and seeding a platform-wide template
+/// are administrative acts; serving a request is not, and since migration 008
+/// the two no longer run as the same role. Anything that needs DDL, or that
+/// models an operator rather than a tenant, belongs here.
+///
+/// It also connects as whatever `DATABASE_URL` says — `ods`, a superuser — which
+/// is what makes it the witness of non-vacuity in `tests/rls_enforcement_test.rs`:
+/// the same context-free query that returns nothing on [`setup_test_pool`]
+/// returns every tenant's rows here.
+pub async fn setup_admin_pool() -> sqlx::PgPool {
+    let setup = session_setup(false);
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .after_connect(|conn, _meta| {
-            Box::pin(async move {
-                conn.execute("SET search_path = editor, public;")
-                    .await
-                    .map(|_| ())
-            })
+        .after_connect(move |conn, _meta| {
+            let setup = setup.clone();
+            Box::pin(async move { conn.execute(setup.as_str()).await.map(|_| ()) })
         })
         .connect(&database_url())
         .await
@@ -69,7 +80,52 @@ pub async fn setup_test_pool() -> sqlx::PgPool {
     pool
 }
 
+/// The pool the tests exercise the service through — wired **exactly** like the
+/// serving pool of `src/main.rs`, runtime role included.
+///
+/// This is deliberate, and it is the difference between a security control and
+/// a claim about one. If the suite ran as the privileged role of the connection
+/// string, every repository path would be tested with the policies switched off,
+/// and a write path that forgot to open a tenant transaction would stay green
+/// here and fail in production the day the role is hardened. The same reasoning
+/// as `tests/events_roundtrip.rs`: a guard that is disabled precisely where it
+/// was supposed to guard proves nothing.
+pub async fn setup_test_pool() -> sqlx::PgPool {
+    let admin = setup_admin_pool().await;
+
+    let adopt = runtime_role_is_adoptable(&admin)
+        .await
+        .expect("the runtime role is checkable");
+    let setup = session_setup(adopt);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .after_connect(move |conn, _meta| {
+            let setup = setup.clone();
+            Box::pin(async move { conn.execute(setup.as_str()).await.map(|_| ()) })
+        })
+        .connect(&database_url())
+        .await
+        .expect("Failed to open the serving test pool");
+
+    admin.close().await;
+    pool
+}
+
 /// Insert a template row directly (there is no template-authoring API yet).
+///
+/// Two different acts behind one helper, and the split is the policy's, not a
+/// convenience:
+///
+/// * a **tenant's own** template is something that tenant may write, so it is
+///   written under its own tenant context — which exercises the `WITH CHECK`
+///   half of the policy rather than stepping around it;
+/// * a **platform** template (`tenant_id IS NULL`) is something no tenant may
+///   write, by design: migration 007's `WITH CHECK` exists precisely so that no
+///   tenant can forge a platform-wide template. Seeding one is an operator act,
+///   so the transaction escalates with `SET LOCAL ROLE NONE` — `LOCAL`, so the
+///   escalation dies with the transaction and the connection returns to the pool
+///   still running as the runtime role.
 pub async fn insert_template(
     pool: &sqlx::PgPool,
     tenant_id: Option<Uuid>,
@@ -77,7 +133,20 @@ pub async fn insert_template(
     content_html: &str,
     created_by: Uuid,
 ) -> Uuid {
-    sqlx::query_scalar(
+    let mut tx = match tenant_id {
+        Some(tenant) => begin_tenant_tx(pool, tenant)
+            .await
+            .expect("tenant transaction opens"),
+        None => {
+            let mut tx = pool.begin().await.expect("transaction opens");
+            tx.execute("SET LOCAL ROLE NONE")
+                .await
+                .expect("the fixture can escalate for the length of this transaction");
+            tx
+        }
+    };
+
+    let id: Uuid = sqlx::query_scalar(
         r#"INSERT INTO editor.templates (tenant_id, name, content_html, is_system, created_by)
            VALUES ($1, $2, $3, $4, $5) RETURNING id"#,
     )
@@ -86,9 +155,12 @@ pub async fn insert_template(
     .bind(content_html)
     .bind(tenant_id.is_none())
     .bind(created_by)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
-    .expect("Failed to insert test template")
+    .expect("Failed to insert test template");
+
+    tx.commit().await.expect("Failed to commit test template");
+    id
 }
 
 /// Canonical local Redpanda address, used when `REDPANDA_BROKERS` is absent.

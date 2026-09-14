@@ -7,6 +7,7 @@ use ods_doceditor::api::middleware::correlate;
 use ods_doceditor::api::{documents, health, versions};
 use ods_doceditor::config::AppConfig;
 use ods_doceditor::events::producer::producer_from_config;
+use ods_doceditor::repository::tenant_context;
 use ods_doceditor::service::document_service::DocumentService;
 
 #[actix_web::main]
@@ -34,13 +35,17 @@ async fn main() -> std::io::Result<()> {
     let jwt_config = build_jwt_config(&config);
     tracing::info!("JWT authentication configured");
 
-    // PostgreSQL connection pool
-    let pool = PgPoolOptions::new()
-        .max_connections(20)
+    // ── PostgreSQL: the boot pool ──────────────────────────────────────────
+    // Deliberately separate from the pool that serves requests, and closed as
+    // soon as the schema is in place. Creating a schema, running migrations and
+    // provisioning the runtime role are administrative acts; serving a request
+    // is not, and since migration 008 the two no longer run as the same role.
+    let boot_pool = PgPoolOptions::new()
+        .max_connections(1)
         .after_connect(|conn, _meta| {
             Box::pin(async move {
                 use sqlx::Executor;
-                conn.execute("SET search_path = editor, public;")
+                conn.execute(tenant_context::session_setup(false).as_str())
                     .await
                     .map(|_| ())
             })
@@ -59,19 +64,66 @@ async fn main() -> std::io::Result<()> {
     // Concurrency-safe: `IF NOT EXISTS` is a look followed by an insert and
     // races against itself, so two instances starting together on a fresh
     // database would crash-loop one of them. See repository::schema.
-    ods_doceditor::repository::schema::ensure_schema_exists(&pool, "editor")
+    ods_doceditor::repository::schema::ensure_schema_exists(&boot_pool, "editor")
         .await
         .expect("Failed to ensure the editor schema exists");
 
     // Run migrations
     sqlx::migrate!("./migrations")
-        .run(&pool)
+        .run(&boot_pool)
         .await
         .expect("Failed to run database migrations");
     tracing::info!("Database migrations applied");
 
-    // Say out loud whether the database will actually enforce the policies.
-    ods_doceditor::repository::tenant_context::log_rls_posture(&pool).await;
+    // ── The serving pool drops its own privileges ──────────────────────────
+    // `DATABASE_URL` resolves to a privileged role in every environment this
+    // service has ever run in — `ods`, `rolsuper = t, rolbypassrls = t` — and
+    // PostgreSQL exempts such a role from every policy, whatever migration 007
+    // marks FORCE. Seven BA cycles filed that as "operational, not code" and
+    // nothing moved, because a repository cannot rotate a secret.
+    //
+    // It does not need to. Policies are evaluated against the EFFECTIVE role, so
+    // a session that runs `SET ROLE editor_app` (migration 008) is subject to all
+    // of them from that point on. That is what every connection of this pool does
+    // — and why the posture measured below now reads `editor_app` rather than the
+    // superuser that opened the socket. See tests/rls_enforcement_test.rs.
+    let adopt_runtime_role = tenant_context::runtime_role_is_adoptable(&boot_pool)
+        .await
+        .expect("Could not check the runtime role");
+
+    if adopt_runtime_role {
+        tracing::info!(
+            role = tenant_context::RUNTIME_ROLE,
+            "Serving pool drops into the runtime role on every connection"
+        );
+    } else {
+        tracing::warn!(
+            role = tenant_context::RUNTIME_ROLE,
+            remediation = tenant_context::REMEDIATION,
+            "The runtime role is unavailable — every query will run with the privileges of \
+             the connection string, which bypasses row-level security when they include \
+             SUPERUSER or BYPASSRLS"
+        );
+    }
+
+    let session_setup = tenant_context::session_setup(adopt_runtime_role);
+    let pool = PgPoolOptions::new()
+        .max_connections(20)
+        .after_connect(move |conn, _meta| {
+            let setup = session_setup.clone();
+            Box::pin(async move {
+                use sqlx::Executor;
+                conn.execute(setup.as_str()).await.map(|_| ())
+            })
+        })
+        .connect(&config.database_url)
+        .await
+        .expect("Failed to open the serving connection pool");
+    boot_pool.close().await;
+
+    // Say out loud whether the database will actually enforce the policies, for
+    // the role the requests will really run as.
+    tenant_context::log_rls_posture(&pool).await;
 
     // Event producer. A real one whenever REDPANDA_BROKERS says where to publish.
     let producer = producer_from_config(config.redpanda_brokers.as_deref(), &config.redpanda_topic);
