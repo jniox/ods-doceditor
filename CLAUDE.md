@@ -56,6 +56,26 @@ advances `current_version` takes the same lock on the same row first. See
 ADR-004 and `tests/concurrency_test.rs`. Content is last-write-wins; what is
 guaranteed is that no edit leaves the history and no request fails.
 
+**A soft-delete hides the document AND its whole history, on every read path.**
+`deleted_at IS NULL` is not a per-query detail: the history reads go through
+`version_repo::ensure_live_document`, and any new read of a document or of its
+versions calls it too. This is a single chokepoint on purpose. Until
+2026-09-14 the predicate was written inline in `list_versions` and simply
+forgotten in `get_version` forty lines below, so a deleted document answered
+404 on `GET /documents/{id}` and on `GET /documents/{id}/versions` while
+serving its **full body** on `GET /documents/{id}/versions/{n}` — the only one
+of the three that returns content, and reachable by counting from 1. Tenant
+isolation was never involved; what leaked is a document the caller's own tenant
+had deleted. See `tests/deletion_test.rs`, which asks the question of every
+read path rather than of the one route someone thought about.
+
+**Open, not decided: `archived` freezes the status but not the body.** Status
+transitions are terminal at `archived` (`can_transition_to`), yet a PATCH
+carrying only `content` never enters the transition check, so an archived
+document can still be edited and still advances its version. Whether
+`archived` should freeze content is a product question with no spec to answer
+it — do not "fix" it by guessing; it is reported, not resolved.
+
 ## Multi-Tenancy
 - Auth via JWT Bearer token (RS256 production, HS256 dev/test)
 - AuthUser extractor validates JWT and extracts tenant_id + user_id from claims
