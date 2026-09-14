@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has little or nothing code-actionable — twelve turns running on doceditor — what to do with the turn, the twelve places the real defects have actually been, and the duty to measure a hypothesis (and a decision's premise) before coding it
+description: When a BA report has little or nothing code-actionable — twelve turns running on doceditor, then one that finally did and got the cause wrong — what to do with the turn, the thirteen places the real defects have actually been, and the duty to measure a hypothesis (and a report's own attribution) before coding it
 metadata:
   type: feedback
 ---
@@ -172,7 +172,24 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   `cargo tree -e normal` was read again after the change (675 crates, h2 in
   none) instead of assumed.
 
-**How to apply.** These twelve are a checklist, not anecdotes: concurrency on the
+- **lot 17 — the streak ended, and the finding was mis-attributed.** The
+  thirteenth report carried something real: RUSTSEC-2026-0285 against `rustls`,
+  a crate this service compiles. It also carried a cause — "introduced by this
+  lot's new reqwest+rustls-tls chain" — and that was **false**, provable in one
+  command: `git show bce825b^:Cargo.lock` holds `rustls 0.23.40`, from before
+  that batch, reached through `sqlx`'s `tls-rustls` since the service was
+  written. The dependency is old; only the **advisory** is new. The inversion
+  decides the repair: had a dependency decision caused it, a dependency
+  decision would prevent the next one — as it stands, only a standing
+  measurement does, and the repository had none (the one dependency guard names
+  `h2` 0.3 by name). **So: an actionable report does not end your measuring, it
+  starts it.** Take the fix *and* ask what would have caught it. The
+  path-reading half of the same turn found the better defect anyway: a page walk
+  over ties returned 2 000 rows holding 1 999 documents, because
+  `ORDER BY updated_at DESC` is not total and the planner changes plan between
+  `OFFSET 0` and `OFFSET 1900`.
+
+**How to apply.** These thirteen are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
@@ -220,3 +237,12 @@ but not the body is a product question with no spec — reported in `CLAUDE.md`,
 still not fixed, across three lots. See [[doceditor-batch-20260914-lot10]],
 [[doceditor-batch-20260914-lot9]], [[doceditor-batch-20260914-lot8]] and
 [[doceditor-batch-20260913]].
+
+**And check that your own guard can express the defect, before you trust it.**
+Lot 17's first draft of the ordering test compared the two query plans over the
+*whole* list and they agreed: the instability is produced by the bounded sort,
+i.e. by the **page**, so the guard was green against the very defect it was
+written for. What caught it was writing the non-vacuity assertion first and
+watching it fail. Related, same turn: **do not build a test that waits for the
+planner to change its mind** — the switch point is a cost estimate, so it goes
+green vacuously on a smaller database. Pin the two plans instead.
