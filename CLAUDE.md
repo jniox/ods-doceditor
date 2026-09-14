@@ -160,6 +160,45 @@ See ADR-006 and `tests/search_index_test.rs`, which asks the question in three
 alphabets, forces the sequential-scan plan the index would otherwise hide, and
 fails if the code's bound and the migration's ever diverge.
 
+## Reading a history: the list is a projection, the body-bearing read is one
+**`GET /documents/{id}/versions` returns summaries and the history is NOT
+paginated, so the projection is what bounds its cost — there is nothing else.**
+`version_repo` names two column lists and they are not interchangeable:
+`VERSION_SUMMARY_COLUMNS` (the list, and `insert_version`'s `RETURNING`) and
+`VERSION_COLUMNS` (only `get_version`, whose purpose is to hand a prior body
+back). The list returns `domain::document::DocumentVersionSummary`, which has no
+`content` field at all — a body cannot leak into it by a forgotten column,
+the same reason `Title` and `Pagination` are types.
+
+Until 2026-09-14 the list selected `content` for every version and the handler
+threw it away one layer up, while the published contract said — and still says —
+*"Bodies are not included."* Measured on the running binary at the deployment's
+own limits (`ops/cloudrun/doceditor.json`: **512 MiB**; `MAX_DOCUMENT_SIZE_MB`:
+**10**), a document at the published ceiling with 55 versions — 54 content
+PATCHes, an afternoon of autosaves — answered `GET …/versions` with an
+**OOM kill of the process**, in 0.7 s, on a request whose answer is 9 423 bytes
+of JSON. That is not a failed request: on Cloud Run it takes the *instance*
+down, so every other tenant's in-flight request dies with it, and one caller
+triggers it with two ordinary calls. After the split: `200`, 9 423 bytes, 55 ms,
+6.3 → 7.1 MiB. Fourth batch running in which a cost was attached to a quantity
+other than the one its name promised. See ADR-007 and
+`tests/history_read_test.rs`, which asks PostgreSQL — two histories whose bodies
+differ by four orders of magnitude must cost the same to list — rather than
+trusting this paragraph.
+
+### Measured and NOT fixed: the three settings that only make sense together
+`MAX_DOCUMENT_SIZE_MB=10`, `memory: 512Mi` and an unbounded number of concurrent
+requests are related, and nothing relates them. Measured, with the fix in place:
+**6 concurrent full-size content saves survive (peak 418 MiB); 10 kill the
+instance.** The `RETURNING` half of the fix is real but does not move that
+threshold (433 → 418 MiB at 6 concurrent; 10 is fatal either way) — the dominant
+cost there is the buffered request payload plus its parsed `String`, not the row
+that comes back, and this repo does not claim otherwise. Raising the body
+ceiling to 50 MB would make **two** simultaneous saves fatal. The remedies — a
+smaller ceiling, more instance memory, a Cloud Run concurrency bound, an
+in-process admission limit — are a sizing decision with no spec, and
+`ops/cloudrun/doceditor.json` is outside this repository. Reported, not guessed.
+
 ## Content and versions
 A document carries a `content` body (HTML/Markdown/JSON — the product brings its
 own editor, DocEditor owns the storage and the history). Creation writes
@@ -191,6 +230,12 @@ of the three that returns content, and reachable by counting from 1. Tenant
 isolation was never involved; what leaked is a document the caller's own tenant
 had deleted. See `tests/deletion_test.rs`, which asks the question of every
 read path rather than of the one route someone thought about.
+
+**Open, not decided: the history is unpaginated.** The contract returns every
+version; ten thousand of them now answer with ~1.5 MB of summaries instead of
+gigabytes of bodies, which is survivable where the old behaviour was not, but it
+is still unbounded. A default page size would silently truncate history for
+existing clients — a product decision, not a repair.
 
 **Open, not decided: `archived` freezes the status but not the body.** Status
 transitions are terminal at `archived` (`can_transition_to`), yet a PATCH
