@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has nothing code-actionable — four turns running on doceditor — what to do with the turn, and the four places the real defects have actually been
+description: When a BA report has nothing code-actionable — five turns running on doceditor — what to do with the turn, and the five places the real defects have actually been
 metadata:
   type: feedback
 ---
@@ -16,7 +16,7 @@ this order:
    divergence BR-0002 exists to prevent.
 2. **Then go find a defect yourself, by reading a path rather than a report.**
 
-**Why:** measured four turns running on doceditor (lots 5, 6, 7, 8 —
+**Why:** measured five turns running on doceditor (lots 5, 6, 7, 8, 9 —
 2026-09-13/14). Each report said, in substance, *"no dev cycle needed on the
 code"*. Each turn found something real, and none of it was subtle once looked at:
 
@@ -39,9 +39,21 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   response is invisible. **Ask of every normalisation: who tells the caller, and
   does that code read the same value?**
 
-**How to apply.** These four are a checklist, not anecdotes: concurrency on the
+- **lot 9 — one number used as two different ceilings.**
+  `MAX_DOCUMENT_SIZE_MB` bounded the HTTP payload *and* the stored body. JSON
+  always makes the payload bigger than the body, so a document of exactly the
+  documented maximum was refused (`413 text/plain`) and the service's own 422
+  was unreachable from HTTP entirely. **Ask of every configured limit: what
+  quantity is it actually applied to, and is that the quantity its name
+  promises?** Nothing was red because the only test built an `App` carrying
+  **no `JsonConfig` at all** — a hand-made bench does not merely drift from
+  production, it can be *missing the component under test*. The cure is not a
+  better test: it is one wiring function that `main.rs` and the tests both call.
+
+**How to apply.** These five are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
-re-measured, and a value normalised in one layer and reported in another. Also
+re-measured, a value normalised in one layer and reported in another, and a
+configured limit applied to a different quantity from the one it names. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
@@ -49,5 +61,5 @@ either; on lot 8 the contract was right four times out of four.
 Hold the line in the other direction too: an internal inconsistency you can *see*
 is not automatically a defect you may *decide*. `archived` freezing the status
 but not the body is a product question with no spec — reported in `CLAUDE.md`,
-still not fixed, across three lots. See [[doceditor-batch-20260914-lot8]] and
-[[doceditor-batch-20260913]].
+still not fixed, across three lots. See [[doceditor-batch-20260914-lot9]],
+[[doceditor-batch-20260914-lot8]] and [[doceditor-batch-20260913]].

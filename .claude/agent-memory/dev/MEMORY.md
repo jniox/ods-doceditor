@@ -5,5 +5,6 @@
 - [Batches 2026-09-14](project_doceditor_batch_20260914.md) — lot 6: h2 re-verified not redone, the soft-delete leak found by auditing a rule across its call sites, and the branch-from-dev order that had to be deviated from
 - [Batch 2026-09-14 lot 7](project_doceditor_batch_20260914_lot7.md) — the 7-cycle "operational" finding closed by SET ROLE, the two-pool split, and the sqlx::migrate! compile-time trap
 - [Batch 2026-09-14 lot 8](project_doceditor_batch_20260914_lot8.md) — four defects on one seam: normalised in one layer, reported in another; the value-that-travels fix, and `use actix_web::test` shadowing `#[test]`
+- [Batch 2026-09-14 lot 9](project_doceditor_batch_20260914_lot9.md) — one number used as two ceilings: the documented maximum was unreachable, and the bench carried no JsonConfig at all
 - ["Operational, not code"](feedback_operational_not_code.md) — a premise to measure, not a category to file under: what the process itself can do about the condition
-- [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — four cycles running: what to do with the turn, and where the defects have actually been
+- [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — five cycles running: what to do with the turn, and the five places the defects have actually been
