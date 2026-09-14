@@ -4,7 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 
 use ods_doceditor::api::extractors::JwtConfig;
 use ods_doceditor::api::middleware::correlate;
-use ods_doceditor::api::{documents, health, versions};
+use ods_doceditor::api::{documents, health, payload, versions};
 use ods_doceditor::config::AppConfig;
 use ods_doceditor::events::producer::producer_from_config;
 use ods_doceditor::repository::tenant_context;
@@ -129,12 +129,17 @@ async fn main() -> std::io::Result<()> {
     let producer = producer_from_config(config.redpanda_brokers.as_deref(), &config.redpanda_topic);
     tracing::info!(producer = producer.name(), "Event producer wired");
 
-    // Payload limits based on max_document_size_mb
-    let max_payload_bytes = config.max_document_size_mb * 1024 * 1024;
+    // The ceiling on a DOCUMENT. The ceiling on the PAYLOAD that carries one is
+    // derived from it (`api::payload`) and is deliberately larger: JSON wraps
+    // the body in quotes, escapes some of its characters and puts the title and
+    // the metadata beside it, so making the two equal — which is what this did
+    // until 2026-09-14 — means a document of exactly the documented maximum is
+    // refused by the framework before the service ever sees it.
+    let max_document_bytes = config.max_document_size_mb * 1024 * 1024;
 
     // Document service
     let doc_service =
-        DocumentService::new(pool.clone(), producer).with_max_content_bytes(max_payload_bytes);
+        DocumentService::new(pool.clone(), producer).with_max_content_bytes(max_document_bytes);
 
     let bind = format!("{}:{}", config.server_host, config.server_port);
     tracing::info!("Starting DocEditor on {}", bind);
@@ -147,9 +152,11 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(doc_service.clone()))
             .app_data(web::Data::new(jwt_config.clone()))
-            // Wire max document size to JSON and payload config
-            .app_data(web::JsonConfig::default().limit(max_payload_bytes))
-            .app_data(web::PayloadConfig::default().limit(max_payload_bytes))
+            // Both ceilings, installed by the same call the tests use: a bench
+            // that builds its own limits is a bench that can disagree with
+            // production, which is how the body ceiling stayed green in the
+            // suite while being unreachable on the wire.
+            .configure(payload::limits(max_document_bytes))
             // Health endpoints (no auth)
             .route("/health", web::get().to(health::health))
             // BR-0016: the image must answer 200 on BOTH paths. `/healthz` is

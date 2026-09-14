@@ -14,6 +14,12 @@ pub enum AppError {
     #[error("Bad request: {0}")]
     BadRequest(String),
 
+    /// The request was too long to read at all — distinct from a document that
+    /// is merely too big, which this service reads and refuses with a 422 that
+    /// names the field. See `api::payload`.
+    #[error("Payload too large: {0}")]
+    PayloadTooLarge(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -31,6 +37,8 @@ impl ResponseError for AppError {
                 .json(serde_json::json!({"error": "unauthorized", "message": msg})),
             AppError::BadRequest(msg) => HttpResponse::BadRequest()
                 .json(serde_json::json!({"error": "bad_request", "message": msg})),
+            AppError::PayloadTooLarge(msg) => HttpResponse::PayloadTooLarge()
+                .json(serde_json::json!({"error": "payload_too_large", "message": msg})),
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
                 HttpResponse::InternalServerError().json(

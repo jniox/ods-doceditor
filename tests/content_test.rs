@@ -10,7 +10,7 @@ mod common;
 use actix_web::{test, web, App};
 use common::{insert_template, setup_test_pool};
 use ods_doceditor::api::extractors::test_helpers::{generate_test_token, test_jwt_config};
-use ods_doceditor::api::{documents, versions};
+use ods_doceditor::api::{documents, payload, versions};
 use ods_doceditor::events::producer::InMemoryProducer;
 use ods_doceditor::service::document_service::DocumentService;
 use std::sync::Arc;
@@ -179,6 +179,13 @@ async fn test_update_content_creates_new_immutable_version() {
 
 /// AC-019: `MAX_DOCUMENT_SIZE_MB` is enforced on the body, not only on the
 /// HTTP payload — a product must get a typed 422, not a truncated document.
+///
+/// The claim above is what this test asserted while asserting nothing of the
+/// kind: it built an `App` carrying **no** `JsonConfig`, so the boundary that
+/// refuses a long request first did not exist here, and in production it was
+/// the only thing enforcing anything (a body of exactly the ceiling answered
+/// `413 text/plain`). The limits now come from `api::payload::limits`, the same
+/// call `main.rs` makes — see `tests/size_limit_test.rs` for the whole seam.
 #[actix_web::test]
 async fn test_content_over_the_configured_limit_is_rejected() {
     let pool = setup_test_pool().await;
@@ -195,6 +202,7 @@ async fn test_content_over_the_configured_limit_is_rejected() {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(svc))
             .app_data(web::Data::new(jwt_cfg))
+            .configure(payload::limits(64))
             .configure(app_routes),
     )
     .await;

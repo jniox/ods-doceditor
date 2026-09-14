@@ -70,6 +70,35 @@ empty page — the one reply that is both wrong and plausible, since it reads as
 word. Both have the same shape: **a check that says nothing about the inputs it
 was not shaped for is not a check.** See `tests/list_contract_test.rs`.
 
+## Two ceilings, and why they are not one number
+`MAX_DOCUMENT_SIZE_MB` bounds the **document body as stored**. The HTTP payload
+that carries one is bounded separately and higher — `payload_ceiling()` in
+`src/api/payload.rs` returns `2 × body + 64 KiB` — because JSON wraps the body
+in quotes, escapes some of its characters (`"` → `\"`, `\` → `\\`) and puts the
+title and the metadata beside it.
+
+**Setting both to the same number, which is what `main.rs` did until
+2026-09-14, makes the documented maximum unreachable.** Measured on the running
+binary at `MAX_DOCUMENT_SIZE_MB=1`: a body of `ceiling - 64` was created (201),
+a body of exactly the ceiling answered `413 text/plain`, and so did a body of
+**half** the ceiling made of quote characters — the limit was being applied to
+the encoding, so the largest storable document depended on which characters were
+in it, a number no caller can compute. `DocumentService::validate_content` and
+its `422` were unreachable from HTTP entirely; only the template path could
+reach them.
+
+Two refusals now, and they say different things: over the body ceiling is a
+`422` naming the field and the limit; a request too long to read at all is a
+`413`, in this service's own error shape rather than actix's `text/plain`.
+
+`api::payload::limits()` installs both, and **`main.rs` and the tests call that
+same function**. That is the load-bearing part. The ceiling used to be tested by
+an `App` carrying no `JsonConfig` at all, against a service built with
+`with_max_content_bytes(64)` — a bench from which the boundary that refuses
+first does not exist. A limit tested at the layer that enforces it, from a
+vantage point the caller never occupies, is green in the suite and wrong on the
+wire. See `tests/size_limit_test.rs`.
+
 ## Content and versions
 A document carries a `content` body (HTML/Markdown/JSON — the product brings its
 own editor, DocEditor owns the storage and the history). Creation writes
@@ -242,7 +271,7 @@ now carries the `docker run` line itself (`tests/events_roundtrip.rs`).
 - `DATABASE_URL` (required)
 - `SERVER_HOST` (default: 0.0.0.0), `SERVER_PORT` (default: 8087)
 - `LOG_LEVEL` (default: info; `RUST_LOG` wins when set)
-- `MAX_DOCUMENT_SIZE_MB` (default: 10 — bounds the payload and the body)
+- `MAX_DOCUMENT_SIZE_MB` (default: 10 — the **body**; the payload is derived)
 - `REDPANDA_BROKERS` (**unset means events are dropped**, logged at WARN)
 - `REDPANDA_TOPIC` (default: editor.events)
 - `JWT_RSA_PUBLIC_KEY_B64` (base64-encoded RSA PEM, production)
