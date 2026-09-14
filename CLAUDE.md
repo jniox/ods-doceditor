@@ -14,7 +14,8 @@ ods-platform
 ## Architecture
 - Domain models: `src/domain/` (Document, DocumentVersion, DocumentStatus, and the
   parsed values the boundary builds: `pagination::Pagination`, `text::Title`,
-  `text::Comment`, `metadata::Metadata`)
+  `text::Comment`, `metadata::Metadata`, and the one rule the query string
+  crosses: `query::supplied`)
 - Service layer: `src/service/` (DocumentService — business logic, orchestrates repo + events)
 - API handlers: `src/api/` (HTTP handlers, auth extractor, health)
 - Repository: `src/repository/` (PostgreSQL via sqlx, RLS via tenant_context)
@@ -99,6 +100,54 @@ ceiling was already computed from. `payload.rs`'s test now reads the constants
 the domain enforces, so the two cannot drift apart again. The worst page a caller
 can build is `per_page × 32 KiB`: measured at 100 documents, **3 197 951 bytes,
 64 ms, 23 MiB**. See ADR-008 and `tests/metadata_bounds_test.rs`.
+
+(Re-measured on 2026-09-14 at the deployment's own limits, because the number
+above bounds a single request and the platform serves 80 at once: **80
+concurrent reads of that worst page** — 3 236 451 bytes each — answer `200` ×80
+inside a 512 MiB cgroup, peak **95 MiB**. The hypothesis that the heaviest page
+kills the instance at the platform's default concurrency is **false**; lot 13
+bounded it correctly. Published because a measurement that refuses to credit a
+hypothesis is worth as much as one that confirms it.)
+
+## What a caller types is parsed here — the query string and the path included
+**Every refusal this service puts on the wire carries its own error shape**, and
+`api::payload::limits()` — the single function `main.rs` and the tests both call
+— is where that is made true: `JsonConfig`, `PayloadConfig`, `PathConfig`,
+`QueryConfig` and the answer to an unmatched route. They are one call because
+they are one promise; an extractor wired without its error handler exempts
+itself from the published contract in silence, and nothing goes red.
+
+It had not been true. `docs/openapi.yaml` publishes exactly one error body and
+AC-031 says its enumeration is exact — yet, measured on the running binary,
+seven answers were outside it: `?page=abc`, `?per_page=5.5`, an `int64`
+overflow and `?page=` all answered `400 text/plain "Query deserialize error: …"`,
+`/documents/not-a-uuid` and `…/versions/abc` answered `404 text/plain`, and an
+unmatched route answered `404` with **no body and no content type at all**. A
+generated client reading `response.json()["message"]` gets a parse failure
+instead of the message. Same seam as the payload ceiling of lot 9, two
+extractors over, and invisible for the same reason: `tests/error_surface.rs`
+reads `src/error.rs` and the contract, never the wire. The statuses did not
+change — only the shape.
+
+**And on the same query string: a parameter whose value is blank is a parameter
+that was not supplied.** `?page=&per_page=&status=&search=` is one gesture — a
+form submitted with nothing typed into it — and it used to have four answers:
+`400 text/plain` for `page` and `per_page`, `400 application/json` for `status`,
+and, worst because it is silent, `200` **with an empty page** for `search`, so a
+tenant owning documents was told it owned none. The rule is not invented: it is
+the one `api::middleware::correlate` already applies to headers, and it now
+lives in `domain::query::supplied`, which the four parameters cross. `page` and
+`per_page` therefore arrive as **strings** and are parsed by
+`Pagination::parse`, which names the parameter at fault instead of quoting
+serde.
+
+**No wider than that.** A value that is not blank travels exactly as it was
+sent: `?status=published%20` is still the `400` `tests/list_contract_test.rs`
+chose for it on purpose, and `?page=%2020%20` is still refused. Trimming those
+would have overturned a neighbouring decision while claiming to repair this one
+— which is not something a batch gets to decide in passing. See ADR-010 and
+`tests/query_contract_test.rs`, which reads the permitted error codes out of
+`docs/openapi.yaml` rather than restating them.
 
 ## The fields a human types: characters, and one value that travels
 `title`, `comment` and metadata string values are bounded in **characters** —
