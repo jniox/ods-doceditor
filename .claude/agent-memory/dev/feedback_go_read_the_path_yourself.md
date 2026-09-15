@@ -239,9 +239,37 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   the variable, so the one serving 100 % of traffic runs at the old 10 MB
   default). Third, **the taken-but-unrouted check came back negative** —
   HR-20260915-003 really is `PENDING`, with no `resolution` and no `enactError`.
-  Run it every time; do not assume either answer.
+  Run it every time; do not assume either answer. (Lot 20 ran it again and the
+  deciding field was `options[0].enactor`: `resolver`, not `dev` — so the same
+  check that once handed me the work correctly handed it away.)
 
-**How to apply.** These fifteen are a checklist, not anecdotes: concurrency on the
+- **lot 20 — the refusal was written by the database, so the caller was told the
+  wrong thing.** `U+0000` is legal JSON (`"\u0000"`), a legal query value (`%00`),
+  and the one character PostgreSQL will not store (`22021` in `text`, `22P05` in
+  `jsonb`). No boundary looked for it, so five fields carried it down and the
+  **database** wrote the answer: `title`, `content`, a `metadata` value, a **nested
+  metadata key**, a snapshot `comment` and `?search=%00` each answered `500
+  internal_error` with an ERROR log line. Lot 15's question ("who answers when
+  something refuses, and in what shape?") asked one layer lower — not of a
+  framework extractor but of the **column**, which is the third time that layer has
+  been the one refusing (lot 10's `VARCHAR(500)`, lot 11's `tsvector` budget). Three
+  halves worth keeping. First, **a 500 is not merely an ugly status**: it says *our
+  fault, try again* about a request that can never succeed, it names no field, and
+  it pages somebody for an input a caller picks at will — that is the argument that
+  makes this worth a lot, not the status code. Second, **the width of a new refusal
+  needs its own test**: `U+0001` is just as unprintable and perfectly storable, so a
+  test that it still round-trips is what stops the next reader turning a
+  one-character bound into a sanitiser and killing ADR-001 quietly. Third, **say out
+  loud what you could not measure**: the same turn found `X-Correlation-Id` adopted
+  at any length into every event attribute (60 000 bytes, measured) against a
+  documented Pub/Sub limit of 1 024 — and the *refusal* half could not be measured
+  from this host (the API resolves the topic before validating the message; no
+  publisher role; no emulator). It was reported rather than coded, with the three
+  failed attempts written down, because bounding an id the contract calls "adopted
+  when supplied" on an unverified premise is exactly the passing overturn lot 15
+  learned to avoid.
+
+**How to apply.** These sixteen are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
@@ -250,8 +278,9 @@ count in, and a **constraint that lives outside the application code entirely**
 — an index expression, a column type, a trigger — refusing what the code
 happily accepts, a rule whose check is silent about every shape of input it
 was not written for, **an input the boundary never parsed at all, whose
-refusals are therefore written by the framework**, and **a decision the report
-calls pending that the JSON says was taken and never routed**. Also
+refusals are therefore written by the framework — or, one layer lower, by the
+column**, and **a decision the report calls pending that the JSON says was taken
+and never routed**. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
