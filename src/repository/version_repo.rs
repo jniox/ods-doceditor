@@ -35,6 +35,47 @@ pub const VERSION_COLUMNS: &str = "id, document_id, tenant_id, version, yjs_snap
 pub const VERSION_SUMMARY_COLUMNS: &str = "id, document_id, tenant_id, version, created_by, \
                                            created_at, comment, snapshot_size_bytes, is_auto";
 
+/// What an explicit snapshot reads under its lock — and deliberately not one
+/// column more.
+///
+/// [`create_version`] locks the document row before it decides anything, and
+/// until 2026-09-15 it locked it with `current_version, yjs_state, content`:
+/// every snapshot therefore pulled the whole body out of PostgreSQL only to bind
+/// it straight back into the INSERT one statement later. The lock needs the
+/// number the next version follows, and the existence of a live row to answer
+/// 404. Nothing else.
+///
+/// Named as a constant for the same reason `document_repo` names
+/// `UPDATE_LOCK_COLUMNS`: a projection written inline is a projection that grows
+/// a body column back the next time someone needs one more field.
+pub const SNAPSHOT_LOCK_COLUMNS: &str = "current_version";
+
+/// Where the body of the new version row comes from.
+///
+/// The distinction is a cost, not a style. Two of the three paths that write a
+/// version were **handed** the body by the caller — creation and content
+/// mutation both receive it in the request, so it is already in this process
+/// and binding it costs nothing new. The third, an explicit snapshot, was not:
+/// its request is a document id and at most a 500-character comment, and the
+/// body it must copy is whatever the document already stores.
+///
+/// Naming the two cases apart is what lets the second one be copied **inside
+/// PostgreSQL**. See [`VersionBody::OfDocumentAsItStands`] and ADR-015.
+pub(crate) enum VersionBody<'a> {
+    /// The caller already holds the body; bind it.
+    Supplied {
+        content: &'a str,
+        yjs_snapshot: &'a [u8],
+    },
+    /// The body is whatever `editor.documents` holds for this document right
+    /// now, and it never leaves the server.
+    ///
+    /// The caller must already hold the document row's `FOR UPDATE` lock — this
+    /// is a read of the same row inside the same transaction, and the version
+    /// number it is paired with was decided under that lock (ADR-004).
+    OfDocumentAsItStands,
+}
+
 /// Insert one immutable version row inside an existing tenant transaction.
 ///
 /// Shared by the three paths that produce a version — document creation,
@@ -43,8 +84,7 @@ pub const VERSION_SUMMARY_COLUMNS: &str = "id, document_id, tenant_id, version, 
 /// delete counterpart in this module.
 pub(crate) struct NewVersion<'a> {
     pub version: i32,
-    pub content: &'a str,
-    pub yjs_snapshot: &'a [u8],
+    pub body: VersionBody<'a>,
     pub created_by: Uuid,
     /// Already bounded: the public doors of this module take a parsed
     /// [`Comment`], and the only `&str` that reaches here is this service's own
@@ -63,37 +103,74 @@ pub(crate) async fn insert_version(
 ) -> AppResult<DocumentVersionSummary> {
     let NewVersion {
         version,
-        content,
-        yjs_snapshot,
+        body,
         created_by,
         comment,
         is_auto,
     } = new;
-    // The snapshot is the authored body plus whatever CRDT state existed; both
-    // are restored together, so both are measured together.
-    let snapshot_size = (content.len() + yjs_snapshot.len()).min(i32::MAX as usize) as i32;
 
-    // `RETURNING` the summary and not the row: the body was just sent *to*
-    // PostgreSQL by this very statement, so asking for it back doubles the cost
-    // of every save on a value none of the three callers reads.
-    let version: DocumentVersionSummary = sqlx::query_as(&format!(
-        r#"INSERT INTO editor.document_versions
-            (document_id, tenant_id, version, yjs_snapshot, created_by, comment,
-             snapshot_size_bytes, is_auto, content)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING {VERSION_SUMMARY_COLUMNS}"#
-    ))
-    .bind(document_id)
-    .bind(tenant_id)
-    .bind(version)
-    .bind(yjs_snapshot)
-    .bind(created_by)
-    .bind(comment)
-    .bind(snapshot_size)
-    .bind(is_auto)
-    .bind(content)
-    .fetch_one(&mut *conn)
-    .await?;
+    // `RETURNING` the summary and not the row: the body is written by this very
+    // statement, so asking for it back doubles the cost of every save on a value
+    // none of the three callers reads.
+    let version: DocumentVersionSummary = match body {
+        VersionBody::Supplied {
+            content,
+            yjs_snapshot,
+        } => {
+            // The snapshot is the authored body plus whatever CRDT state
+            // existed; both are restored together, so both are measured
+            // together. `str::len()` is bytes, which is what
+            // `snapshot_size_bytes` names and what `octet_length` counts in the
+            // sibling statement below — the two must agree.
+            let snapshot_size = (content.len() + yjs_snapshot.len()).min(i32::MAX as usize) as i32;
+            sqlx::query_as(&format!(
+                r#"INSERT INTO editor.document_versions
+                    (document_id, tenant_id, version, yjs_snapshot, created_by, comment,
+                     snapshot_size_bytes, is_auto, content)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 RETURNING {VERSION_SUMMARY_COLUMNS}"#
+            ))
+            .bind(document_id)
+            .bind(tenant_id)
+            .bind(version)
+            .bind(yjs_snapshot)
+            .bind(created_by)
+            .bind(comment)
+            .bind(snapshot_size)
+            .bind(is_auto)
+            .bind(content)
+            .fetch_one(&mut *conn)
+            .await?
+        }
+        // The body is copied by PostgreSQL, from one table to another, without
+        // ever crossing this connection. What the caller asked for is "snapshot
+        // this document as it stands"; naming that in SQL is what makes the cost
+        // of the request the size of the request. See ADR-015.
+        VersionBody::OfDocumentAsItStands => {
+            sqlx::query_as(&format!(
+                r#"INSERT INTO editor.document_versions
+                    (document_id, tenant_id, version, yjs_snapshot, created_by, comment,
+                     snapshot_size_bytes, is_auto, content)
+                 SELECT $1, $2, $3,
+                        coalesce(d.yjs_state, ''::bytea),
+                        $4, $5,
+                        octet_length(d.content) + coalesce(octet_length(d.yjs_state), 0),
+                        $6,
+                        d.content
+                   FROM editor.documents d
+                  WHERE d.id = $1 AND d.tenant_id = $2 AND d.deleted_at IS NULL
+                 RETURNING {VERSION_SUMMARY_COLUMNS}"#
+            ))
+            .bind(document_id)
+            .bind(tenant_id)
+            .bind(version)
+            .bind(created_by)
+            .bind(comment)
+            .bind(is_auto)
+            .fetch_one(&mut *conn)
+            .await?
+        }
+    };
 
     Ok(version)
 }
@@ -112,7 +189,10 @@ pub async fn create_version(
 ) -> AppResult<DocumentVersionSummary> {
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // Read the body to snapshot (defense-in-depth: filter by tenant_id).
+    // Lock the row, and read of it only what the decision needs: the number the
+    // next version follows, and the existence of a live row to answer 404. See
+    // [`SNAPSHOT_LOCK_COLUMNS`] — this read used to ask for `content` and
+    // `yjs_state` as well, and hand them straight back to the INSERT below.
     //
     // `FOR UPDATE` for the same reason as in `document_repo::update_document`,
     // and it must be the SAME lock, taken on the SAME row, in the same order:
@@ -120,10 +200,12 @@ pub async fn create_version(
     // update path does the reverse, so an explicit snapshot racing a save used
     // to deadlock — each holding what the other waited for. Serialising on the
     // document row removes both the duplicate version number and the deadlock.
-    // See tests/concurrency_test.rs.
-    let row = sqlx::query(
-        "SELECT current_version, yjs_state, content FROM editor.documents WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL FOR UPDATE",
-    )
+    // The lock has not moved; only its projection has. See
+    // tests/concurrency_test.rs.
+    let row = sqlx::query(&format!(
+        "SELECT {SNAPSHOT_LOCK_COLUMNS} FROM editor.documents \
+         WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL FOR UPDATE"
+    ))
     .bind(document_id)
     .bind(tenant_id)
     .fetch_optional(&mut *tx)
@@ -131,9 +213,6 @@ pub async fn create_version(
     .ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
 
     let current_version: i32 = row.get("current_version");
-    let yjs_state: Option<Vec<u8>> = row.get("yjs_state");
-    let content: String = row.get("content");
-    let yjs_snapshot = yjs_state.unwrap_or_default();
     let new_version = current_version + 1;
 
     let version = insert_version(
@@ -142,8 +221,11 @@ pub async fn create_version(
         document_id,
         NewVersion {
             version: new_version,
-            content: &content,
-            yjs_snapshot: &yjs_snapshot,
+            // PostgreSQL copies the body from one table to the other under the
+            // lock we already hold. It used to travel here and back — which made
+            // a thirty-byte request cost the stored document, twice, and at the
+            // deployment's 512 MiB it killed the instance. See ADR-015.
+            body: VersionBody::OfDocumentAsItStands,
             created_by,
             comment: comment.map(Comment::as_str),
             is_auto,

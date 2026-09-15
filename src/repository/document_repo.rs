@@ -7,7 +7,7 @@ use crate::domain::pagination::Pagination;
 use crate::domain::text::Title;
 use crate::error::{AppError, AppResult};
 use crate::repository::tenant_context::begin_tenant_tx;
-use crate::repository::version_repo::{insert_version, NewVersion};
+use crate::repository::version_repo::{insert_version, NewVersion, VersionBody};
 
 /// How much of a document PostgreSQL is asked to index for full-text search.
 ///
@@ -117,8 +117,12 @@ pub async fn create_document(
         doc.id,
         NewVersion {
             version: doc.current_version,
-            content,
-            yjs_snapshot: &[],
+            // The caller sent this body; it is already in this process, so
+            // binding it costs nothing the request has not already paid.
+            body: VersionBody::Supplied {
+                content,
+                yjs_snapshot: &[],
+            },
             created_by,
             comment: Some("initial version"),
             is_auto: true,
@@ -390,8 +394,11 @@ pub async fn update_document(
                 // recomputed here: two spellings of "the next version" is how
                 // the document row and its history come to disagree.
                 version: doc.current_version,
-                content,
-                yjs_snapshot: &[],
+                // Supplied, like creation: this body arrived in the request.
+                body: VersionBody::Supplied {
+                    content,
+                    yjs_snapshot: &[],
+                },
                 created_by: updated_by,
                 comment: None,
                 is_auto: true,
