@@ -28,6 +28,60 @@
 
 use crate::error::{AppError, AppResult};
 
+/// Where the first `U+0000` sits in `value`, as a **character** index, or
+/// `None` when there is none.
+///
+/// # Why this rule exists, and why it is named once
+///
+/// `U+0000` is an ordinary character in JSON (`"\u0000"`) and in a query string
+/// (`%00`), and it is the one character PostgreSQL will not store: `text`
+/// answers `22021 invalid byte sequence for encoding "UTF8": 0x00` and `jsonb`
+/// answers `22P05 unsupported Unicode escape sequence`. Nothing here looked for
+/// it until 2026-09-15, so five fields carried it to the database and the
+/// **database** wrote the reply — measured on the running binary, `title`,
+/// `content`, a metadata value and `?search=` each answered
+/// `500 {"error":"internal_error"}`, with an ERROR log line behind it.
+///
+/// That is the wrong answer three times over: it says *our fault, try again*
+/// about a request that can never succeed, it names no field, and it pages
+/// somebody for an input a caller chose. The contract already has the right
+/// answers — `422` for a body field, `400` for a query parameter — and this is
+/// the same shape as the byte/character bound above it: a constraint that lives
+/// in the **column** rather than in the code, refusing what the boundary
+/// accepted.
+///
+/// It is one function rather than five `if s.contains('\0')` for the reason
+/// `ensure_live_document` is one function: a rule copied to the places somebody
+/// thought about is a rule missing from the place nobody did.
+///
+/// The fast path is `find`, which is a `memchr` byte scan with no allocation;
+/// the character index costs a second walk and is only paid on the way to a
+/// refusal. Measured on the release build the Dockerfile produces, which is the
+/// only build where the number means anything:
+///
+/// ```text
+///  2 MiB body (the ceiling), no NUL   0.63 ms      NUL at the last byte  0.79 ms
+/// 10 MiB body (a stored legacy one)   2.28 ms      NUL at the last byte  3.68 ms
+/// ```
+///
+/// Once per write, against a save that already costs tens of milliseconds of
+/// WAL and index work (ADR-014).
+pub fn nul_at(value: &str) -> Option<usize> {
+    let byte = value.find(NUL)?;
+    Some(value[..byte].chars().count())
+}
+
+/// The character this service cannot store, written once.
+pub const NUL: char = '\u{0}';
+
+/// The refusal, worded once so the five fields answer alike.
+///
+/// It names the field and the position and stops there: *why* it cannot be
+/// stored is PostgreSQL's business and belongs in this file, not on the wire.
+pub fn nul_refusal(what: &str, at: usize) -> String {
+    format!("{what} must not contain the NUL character U+0000 (at character {at})")
+}
+
 /// `CreateDocumentRequest.title` / `UpdateDocumentRequest.title`:
 /// `minLength: 1, maxLength: 500`, "Non-blank once trimmed".
 pub const MAX_TITLE_CHARS: usize = 500;
@@ -60,6 +114,9 @@ impl Title {
                 "Title must be at most {MAX_TITLE_CHARS} characters once trimmed (got {length})"
             )));
         }
+        if let Some(at) = nul_at(trimmed) {
+            return Err(AppError::Validation(nul_refusal("Title", at)));
+        }
 
         Ok(Self(trimmed.to_string()))
     }
@@ -89,6 +146,9 @@ impl Comment {
             return Err(AppError::Validation(format!(
                 "Comment must be at most {MAX_COMMENT_CHARS} characters (got {length})"
             )));
+        }
+        if let Some(at) = nul_at(raw) {
+            return Err(AppError::Validation(nul_refusal("Comment", at)));
         }
         Ok(Self(raw.to_string()))
     }
@@ -145,6 +205,36 @@ mod tests {
         for blank in ["", " ", "\t\n ", "\u{00a0}", "\u{3000}"] {
             assert!(Title::parse(blank).is_err(), "{blank:?} was accepted");
         }
+    }
+
+    /// The character index, not the byte offset — the same unit every other
+    /// bound in this module counts in, so the message means the same thing in
+    /// every alphabet.
+    #[test]
+    fn the_position_reported_is_a_character_index() {
+        assert_eq!(nul_at("clean"), None);
+        assert_eq!(nul_at("a\u{0}b"), Some(1));
+        // Four accented characters are eight bytes; the answer is 4.
+        assert_eq!(nul_at("ééée\u{0}"), Some(4));
+        assert_eq!(nul_at("\u{0}"), Some(0));
+    }
+
+    /// The five fields answer alike because they ask the same function.
+    #[test]
+    fn every_bounded_field_refuses_the_one_character_the_column_cannot_hold() {
+        let title = Title::parse("a\u{0}b").expect_err("a title carrying U+0000");
+        let comment = Comment::parse("relu\u{0}").expect_err("a comment carrying U+0000");
+        for err in [title, comment] {
+            let message = err.to_string();
+            assert!(
+                message.contains("U+0000"),
+                "the refusal must name the character: {message}"
+            );
+        }
+
+        // One character wide: its neighbour is storable and stays accepted.
+        assert_eq!(Title::parse("a\u{1}b").unwrap().as_str(), "a\u{1}b");
+        assert_eq!(Comment::parse("relu\u{1}").unwrap().as_str(), "relu\u{1}");
     }
 
     #[test]

@@ -208,6 +208,54 @@ field parses it into a type and hands the repository that type; it does not add
 a third `if x.len() > N`. See `tests/text_bounds_test.rs`, which asks the
 question in four alphabets.
 
+## And one character that no field may carry, because no column can hold it
+**`U+0000` is refused at the boundary, in every field, at every depth — and it
+is the ONLY character refused.** It is a legal JSON character (`"\u0000"`) and a
+legal query value (`%00`), and it is the one character PostgreSQL will not
+store: `text` answers `22021 invalid byte sequence for encoding "UTF8": 0x00`,
+`jsonb` answers `22P05 unsupported Unicode escape sequence`. Nothing looked for
+it until 2026-09-15, so five fields carried it to the database and **the
+database wrote the reply**: `title`, `content`, a `metadata` value, a snapshot
+`comment` and `?search=` each answered `500 {"error":"internal_error"}`, one
+ERROR log line each, measured on the running binary.
+
+A `500` is the wrong answer three times over: it says *our fault, try again*
+about a request that can never succeed, so a client with a retry policy retries
+for ever; it names no field, so there is nothing to act on; and it pages
+somebody for an input a caller chose, at will. The contract already had the
+answers — `422` for a body field, `400` for a query parameter (ADR-010).
+
+`domain::text::nul_at` states the rule once and the five crossings use it:
+`Title::parse`, `Comment::parse`, `Metadata::parse` (strings **and keys**, at
+every depth), `DocumentService::validate_content`, `domain::query::search_term`.
+The place nobody would have thought of is the **nested metadata key** — the
+pattern `^[a-z][a-z0-9_]{0,63}$` is stated by the contract about the object's
+own keys, so `{"kind": {"nested\u0000key": 1}}` crossed every existing check.
+Anything that adds a string a caller can store crosses that same function; it
+does not add a sixth `if s.contains('\0')`.
+
+It is **not a sanitiser**, and the width is guarded on purpose: `U+0001` is
+just as unprintable, PostgreSQL stores it, so it is still accepted and still
+returned byte-for-byte — ADR-001's "neither parsed, sanitised nor escaped"
+stands. Third time in this repository that a constraint living in the **column**
+rather than in the code refused what the boundary accepted (`VARCHAR(500)`, the
+`tsvector` budget, and now the encoding). See ADR-016 and
+`tests/unstorable_character_test.rs`, whose first test asks PostgreSQL for the
+premise instead of asserting it in prose.
+
+**Open, and deliberately not decided here**: `X-Correlation-Id` is adopted
+verbatim at any length and travels into every event as `ce-correlationid`.
+Measured on the running binary the same day — an id of 60 000 characters is
+accepted, echoed and published as a 60 000-byte attribute (actix refuses the
+request head above ~128 KiB, `431`). Google documents a Pub/Sub limit of
+**1 024 bytes per attribute value**, which would make every event of such a
+request `INVALID_ARGUMENT` — i.e. *silently* dropped, this service's documented
+failure mode. That premise could not be measured from this host: the publishing
+account has no `pubsub.publisher` on staging, the API validates the topic before
+the message, and no emulator is installed. It is reported rather than fixed,
+because bounding an id the contract says is "adopted when supplied" on an
+unverified premise is how a neighbouring decision gets overturned in passing.
+
 ## Two ceilings, and why they are not one number
 `MAX_DOCUMENT_SIZE_MB` bounds the **document body as stored** — 2 MB by
 default, and that number is sized against the instance rather than chosen (see

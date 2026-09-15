@@ -26,6 +26,9 @@
 //! absent header. This module is that same sentence, moved to where the other
 //! half of the request is read. See `tests/query_contract_test.rs`.
 
+use crate::domain::text::{nul_at, nul_refusal};
+use crate::error::{AppError, AppResult};
+
 /// The value a caller supplied, or `None` when the parameter carries nothing.
 ///
 /// Blankness is judged after trimming — `?search=%20` is a field the caller
@@ -41,9 +44,37 @@ pub fn supplied(raw: Option<&str>) -> Option<&str> {
     raw.filter(|value| !value.trim().is_empty())
 }
 
+/// The search term a caller supplied, refused when it carries a character the
+/// database cannot be asked about.
+///
+/// `search` is the only one of the four parameters whose value travels to
+/// PostgreSQL as text — `page` and `per_page` are parsed into integers, and
+/// `status` must be one of three words — so it is the only one that could
+/// carry `U+0000` into a query. It did: `?search=%00` answered
+/// `500 {"error":"internal_error"}` until 2026-09-15, because the parameter
+/// reached `plainto_tsquery` and PostgreSQL refused the *bind* with `22021`.
+///
+/// A `400` and not a `422`, because that is what this service already answers
+/// for a query parameter it will not accept (`?status=published%20`,
+/// `?page=abc`) — the refusal belongs to the query string, not to a body
+/// field. The rule itself is [`crate::domain::text::nul_at`], the same one the
+/// four body fields cross.
+pub fn search_term(raw: Option<&str>) -> AppResult<Option<&str>> {
+    let Some(term) = supplied(raw) else {
+        return Ok(None);
+    };
+    if let Some(at) = nul_at(term) {
+        return Err(AppError::BadRequest(nul_refusal(
+            "Query parameter 'search'",
+            at,
+        )));
+    }
+    Ok(Some(term))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::supplied;
+    use super::{search_term, supplied};
 
     #[test]
     fn a_blank_value_is_no_value() {
@@ -51,6 +82,25 @@ mod tests {
         assert_eq!(supplied(Some("")), None);
         assert_eq!(supplied(Some("   ")), None);
         assert_eq!(supplied(Some("\t\n")), None);
+    }
+
+    /// `?search=%00` reached `plainto_tsquery` and answered `500`. It is the
+    /// query string's own refusal — `400` — and the term is otherwise untouched.
+    #[test]
+    fn a_search_term_carrying_the_unstorable_character_is_refused_as_a_bad_request() {
+        assert_eq!(search_term(None).unwrap(), None);
+        assert_eq!(search_term(Some("  ")).unwrap(), None);
+        assert_eq!(
+            search_term(Some(" clause resolutoire ")).unwrap(),
+            Some(" clause resolutoire ")
+        );
+
+        let err = search_term(Some("clause\u{0}resolutoire")).expect_err("U+0000 in a search term");
+        assert!(
+            matches!(err, crate::error::AppError::BadRequest(_)),
+            "{err}"
+        );
+        assert!(err.to_string().contains("search"), "{err}");
     }
 
     #[test]

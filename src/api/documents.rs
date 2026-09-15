@@ -6,7 +6,7 @@ use crate::api::extractors::AuthUser;
 use crate::domain::document::DocumentUpdate;
 use crate::domain::metadata::Metadata;
 use crate::domain::pagination::Pagination;
-use crate::domain::query::supplied;
+use crate::domain::query::{search_term, supplied};
 use crate::domain::text::Title;
 use crate::error::AppError;
 use crate::service::document_service::DocumentService;
@@ -109,7 +109,7 @@ pub async fn list_documents(
             auth.tenant_id,
             pagination,
             supplied(query.status.as_deref()),
-            supplied(query.search.as_deref()),
+            search_term(query.search.as_deref())?,
         )
         .await?;
 
