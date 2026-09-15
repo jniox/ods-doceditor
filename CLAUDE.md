@@ -386,6 +386,67 @@ the next reader inherits a false premise. See ADR-014 and
 paragraph — a per-row fact, immune to what the rest of the suite writes in
 parallel, unlike a WAL delta.
 
+## Taking a snapshot: the cost of a request is the request's, not the document's
+**`POST /documents/{id}/versions` copies the body INSIDE PostgreSQL; it does not
+pull it through this process.** The request is a document id and, at most, a
+500-character comment — but until 2026-09-15 `create_version` locked the row
+with `SELECT current_version, yjs_state, content … FOR UPDATE`, read the body
+into a Rust `String`, and bound that same string straight back as a parameter of
+the `INSERT` one statement later. The body crossed the connection **twice** and
+sat in memory in between.
+
+Nothing in the request bounds that, and **`MAX_DOCUMENT_SIZE_MB` does not
+either**: it is checked on bodies a caller *sends*, and ADR-009 deliberately
+leaves documents stored above it readable, renamable and snapshottable. That a
+10 MB body is reachable is **measured on the deployment**: neither live revision
+sets `MAX_DOCUMENT_SIZE_MB`, so `doceditor-00003-vkq` — the May 2026 binary
+carrying 100 % of traffic — falls back to the old default of **10 MB**, while
+the revision carrying the 2 MB default carries 0 %. (Do not argue this from the
+dev instance's contents, as the first draft did: the documents there above 2 MB
+are titled *ceiling probe* and dated 2026-09-14 — lot 14's own fixtures.)
+
+Measured on the running binary in a cgroup at the deployment's 512 MiB, N
+concurrent snapshots of one document (80 is Cloud Run's own default
+concurrency, which `ops/cloudrun/doceditor.json` does not override):
+
+```text
+  body    N      before                                    after
+  10 MB  20   oom-kill, 3-4 answers lost, /health gone   200 x20,  75 MiB
+  10 MB  80   oom-kill, 52 answers lost,  /health gone   200 x80,  75 MiB
+   8 MB  20   200 x20, 473 MiB, 9 684 ms                 200 x20,  65 MiB, 2 942 ms
+   2 MB  80   200 x80, 126 MiB                           200 x80,  20 MiB
+```
+
+Fifty-two of eighty callers got no answer and the **instance** was gone, not the
+request — so every other tenant's in-flight work died with it, from two ordinary
+calls. Fourth batch running in which a cost was attached to a quantity other
+than the one its name promises, and the second in which that quantity is the
+*stored document* rather than the request.
+
+`version_repo::NewVersion` now carries a `VersionBody`, and the two cases are
+named apart because they cost differently: `Supplied` for creation and content
+mutation (the caller sent the body, it is already here) and
+`OfDocumentAsItStands` for the snapshot, which becomes an
+`INSERT … SELECT … FROM editor.documents`. `snapshot_size_bytes` moves into SQL
+with it — `octet_length` counts the bytes `str::len()` counted. The locking read
+drops to `SNAPSHOT_LOCK_COLUMNS`, for the same reason `UPDATE_LOCK_COLUMNS`
+exists. **The lock has not moved**: same row, same `FOR UPDATE`, same order as
+`update_document`; ADR-004 is untouched.
+
+**What it does not buy, measured too**: the reads that *return* a body are
+unchanged and still close to the cap — `GET /documents/{id}` on a 10 MB document
+twenty at once peaked at **449–512 MiB** before and after. It survives, with no
+headroom, and `GET …/versions/{n}` has the same shape; that cost is the response
+and the contract requires it. Nothing here bounds concurrency either — ADR-009's
+options C and D remain open.
+
+`tests/snapshot_cost_test.rs` asks **the wire**: the pool is pointed at a
+counting TCP proxy inside the test, so the question is "how many bytes did
+PostgreSQL send this process to take a snapshot?" — a narrow-scoped fact the
+thirty other test binaries cannot move, unlike peak RSS. The non-vacuity
+assertion is written and checked first: the same meter must *see* a body when a
+read genuinely carries one. See ADR-015.
+
 ## Content and versions
 A document carries a `content` body (HTML/Markdown/JSON — the product brings its
 own editor, DocEditor owns the storage and the history). Creation writes

@@ -349,6 +349,13 @@ paths:
         Snapshots the document as it currently stands at `current_version + 1`.
         Such a version carries `is_auto: false`, unlike the snapshots the service
         takes itself at creation and on every content change.
+
+        The request carries no body to copy — the server copies the document's
+        own, inside PostgreSQL. The cost of this call is therefore the size of
+        the request and not the size of the document. That was not true until
+        2026-09-15: the body was read out of the database and written straight
+        back, and twenty concurrent snapshots of a 10 MB document killed the
+        instance. See ADR-015.
       requestBody:
         required: true
         content:
