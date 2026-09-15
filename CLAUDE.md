@@ -344,6 +344,45 @@ were not chosen — and C lives outside this repository. Documents already store
 above 2 MB are untouched: the bound is checked on bodies a caller *sends*, so an
 existing 9 MB document stays readable, renamable and snapshottable.
 
+## An update writes the columns it was given
+
+**`PATCH` sends PostgreSQL only the columns the caller named; everything else
+is `COALESCE($n, column)`, and that is load-bearing rather than tidy.** A column
+bound to a parameter is a column PostgreSQL stores afresh, so binding the old
+body back re-TOASTs it: new chunks, new write-ahead log, and the previous chunks
+dead until autovacuum. Until 2026-09-15 `update_document` read the whole row
+under its lock — body included — and wrote every column back, so **renaming a
+document rewrote the document**. Measured on the running binary, on a body of
+8 000 000 incompressible bytes: `PATCH {"title": …}` wrote **9 087 272 bytes of
+WAL in 506 ms**, and the same rename written as a partial `UPDATE` wrote
+**299 120 in 120 ms** — thirty times less. A status change and a metadata change
+cost the same 9 MB. What remains at 299 kB is the index work every update here
+owes and cannot avoid (`updated_at` is indexed, so nothing on this table is ever
+a HOT update, and the GIN expression index of ADR-006 is re-evaluated); it is
+identical before and after.
+
+The same statement stopped *reading* the body too. `UPDATE_LOCK_COLUMNS` is
+`status` — the transition to judge and the existence of a live row to answer
+404, nothing else — where the locking `SELECT … FOR UPDATE` used to ask for
+`DOC_COLUMNS`. Under contention that read was the visible cost: 20 concurrent
+renames produced 19 sqlx *slow statement* warnings, the locking read taking up
+to **10.0 s** because each waiter detoasted and shipped 8 MB before deciding
+anything. **The lock itself has not moved** — same row, same order as
+`version_repo::create_version`, ADR-004 untouched; only its projection changed.
+`current_version` is now advanced by PostgreSQL inside that statement and
+`insert_version` takes the number from the `RETURNING`, so there is no longer a
+second spelling of "the next version" anywhere.
+
+The hypothesis measurement refused: this was **not** an instance killer. Forty
+concurrent renames of that 8 MB document in a 512 MiB cgroup answered `200`
+forty times before (peak 384 MiB) and after (238 MiB) — the repair buys headroom
+and log volume, not a rescue. Said out loud because a benefit overstated is how
+the next reader inherits a false premise. See ADR-014 and
+`tests/update_cost_test.rs`, which asks PostgreSQL 17's
+`pg_column_toast_chunk_id` whether the body moved rather than trusting this
+paragraph — a per-row fact, immune to what the rest of the suite writes in
+parallel, unlike a WAL delta.
+
 ## Content and versions
 A document carries a `content` body (HTML/Markdown/JSON — the product brings its
 own editor, DocEditor owns the storage and the history). Creation writes
