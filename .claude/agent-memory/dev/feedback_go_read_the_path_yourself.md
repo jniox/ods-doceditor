@@ -212,7 +212,36 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   this was **not** an instance killer — 40 concurrent renames answered `200`
   forty times before the fix as well as after.
 
-**How to apply.** These fourteen are a checklist, not anecdotes: concurrency on the
+- **lot 19 — a request of twenty-four bytes whose cost was the stored
+  document, and a premise I had to withdraw because my own fixtures were the
+  evidence.** `POST /documents/{id}/versions` carries a document id and at most a
+  500-character comment; `create_version` selected `content` out of PostgreSQL
+  into a `String` and bound that same string straight back into the `INSERT` one
+  statement later. Nothing in the request bounds that, and — the sharp part —
+  **`MAX_DOCUMENT_SIZE_MB` does not either**, because it is checked on what a
+  caller *sends* while ADR-009 deliberately keeps already-stored larger bodies
+  snapshottable. At the deployment's own 512 MiB and Cloud Run's own default
+  concurrency of 80, **fifty-two of eighty callers got no answer and the instance
+  was gone**. Lot 12's question asked of a *write*: not "what does this endpoint
+  return" but "what did it have to move to answer", and the answer was a quantity
+  no caller can influence. Three halves worth keeping. First, **the instrument
+  again decided whether the guard could exist**: peak RSS is cluster-wide noise
+  with 31 binaries on one instance, so the guard points the pool at a **counting
+  TCP proxy** and asks how many bytes crossed *this pool's own socket* — narrow
+  scope, immune to neighbours, exactly lot 18's move one layer over. Second, and
+  this is the new one: **check your own fixture before you report the world, not
+  just before you report the service.** My draft argued that large documents are
+  reachable because "six exist on the dev instance"; after cleaning up this
+  turn's fixtures, two were left, both titled `ceiling probe` and dated
+  2026-09-14 — *lot 14's* fixtures. A shared dev database full of agents'
+  leftovers looks exactly like one full of traffic. The argument that held was a
+  **deployment** fact (`gcloud run revisions describe`: neither live revision sets
+  the variable, so the one serving 100 % of traffic runs at the old 10 MB
+  default). Third, **the taken-but-unrouted check came back negative** —
+  HR-20260915-003 really is `PENDING`, with no `resolution` and no `enactError`.
+  Run it every time; do not assume either answer.
+
+**How to apply.** These fifteen are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
