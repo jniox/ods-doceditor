@@ -10,6 +10,24 @@ alone is enough to pull `h2` 0.3 back into `Cargo.lock`, which is the file
 answers to the same rule for the same reason — `default-features = false`, no
 `http2` — which is why the Pub/Sub producer talks REST and not gRPC (ADR-011).
 
+**An advisory against a crate this service COMPILES fails the build; the
+lockfile's tally does not.** `cargo audit` reads `Cargo.lock`, which is wider
+than the binary — it pins the optional dependencies of our dependencies — so
+its "1 vulnerability found" has, every time it has been examined here, named a
+crate nothing compiles (`rsa` through `sqlx-mysql`, `anyhow`, `spin`). The
+judgement is the intersection with `cargo tree -e normal` — that is BR-0010, and
+it lives in `~/dev/ops/standards/STANDARDS.md` §7 rather than in the project's
+`business-rules.md`, which is why lot 17 reported it as a phantom citation. It is
+a command rather than a habit (`scripts/audit-delivered-graph.sh`, CI job
+`Advisories`),
+and `tests/advisories.rs` keeps that command wired and non-vacuous. It exists
+because on 2026-09-14 RUSTSEC-2026-0285 landed on `rustls` 0.23.40 — shipped
+here through `sqlx` since the service was written, and through `reqwest` since
+ADR-011 — and **nothing in the repository went red**: the only dependency guard
+names `h2` 0.3, and a guard shaped for one crate says nothing about the next
+one. Take the fix, not the ignore; there is no `.cargo/audit.toml` here and
+ADR-012 says why.
+
 ## Project
 ods-platform
 
@@ -57,6 +75,18 @@ says `maximum: 100`) and `?page=0` answered `"page": 0` above the first page: a
 client computing `ceil(total / per_page)` sees one page of a hundred, and one
 walking `0, 1, 2` reads the first page twice. Nothing was red — the clamp test
 called the *service*, which is the one place the response is not visible.
+
+**And the order the pages are drawn from is TOTAL**, which is the other half
+of "a page is what was served": `ORDER BY updated_at DESC` alone ties whenever
+one transaction writes two documents — `now()` is the transaction timestamp —
+and PostgreSQL then returns tied rows in whatever order the plan produces,
+choosing a different plan for different offsets. Measured over 2 000 tied
+documents, `OFFSET 0` ran an index scan and `OFFSET 1900` a sort; walking all
+twenty pages returned 2 000 rows holding **1 999** documents — one twice, one
+never. Today's data has no ties at all (7 074 documents, zero), so the list was
+stable by a property of the traffic rather than of the query. It is
+`updated_at DESC, id DESC` now. Anything paginating here orders by something
+unique; see ADR-013 and `tests/list_stability_test.rs`.
 
 `Pagination::offset()` is **saturating, not `*`**. `(page - 1) * per_page`
 overflows for a page a caller can type: `page=9223372036854775807` panicked the
@@ -177,6 +207,54 @@ values — the same cure as `Pagination` above. Anything that adds a bounded tex
 field parses it into a type and hands the repository that type; it does not add
 a third `if x.len() > N`. See `tests/text_bounds_test.rs`, which asks the
 question in four alphabets.
+
+## And one character that no field may carry, because no column can hold it
+**`U+0000` is refused at the boundary, in every field, at every depth — and it
+is the ONLY character refused.** It is a legal JSON character (`"\u0000"`) and a
+legal query value (`%00`), and it is the one character PostgreSQL will not
+store: `text` answers `22021 invalid byte sequence for encoding "UTF8": 0x00`,
+`jsonb` answers `22P05 unsupported Unicode escape sequence`. Nothing looked for
+it until 2026-09-15, so five fields carried it to the database and **the
+database wrote the reply**: `title`, `content`, a `metadata` value, a snapshot
+`comment` and `?search=` each answered `500 {"error":"internal_error"}`, one
+ERROR log line each, measured on the running binary.
+
+A `500` is the wrong answer three times over: it says *our fault, try again*
+about a request that can never succeed, so a client with a retry policy retries
+for ever; it names no field, so there is nothing to act on; and it pages
+somebody for an input a caller chose, at will. The contract already had the
+answers — `422` for a body field, `400` for a query parameter (ADR-010).
+
+`domain::text::nul_at` states the rule once and the five crossings use it:
+`Title::parse`, `Comment::parse`, `Metadata::parse` (strings **and keys**, at
+every depth), `DocumentService::validate_content`, `domain::query::search_term`.
+The place nobody would have thought of is the **nested metadata key** — the
+pattern `^[a-z][a-z0-9_]{0,63}$` is stated by the contract about the object's
+own keys, so `{"kind": {"nested\u0000key": 1}}` crossed every existing check.
+Anything that adds a string a caller can store crosses that same function; it
+does not add a sixth `if s.contains('\0')`.
+
+It is **not a sanitiser**, and the width is guarded on purpose: `U+0001` is
+just as unprintable, PostgreSQL stores it, so it is still accepted and still
+returned byte-for-byte — ADR-001's "neither parsed, sanitised nor escaped"
+stands. Third time in this repository that a constraint living in the **column**
+rather than in the code refused what the boundary accepted (`VARCHAR(500)`, the
+`tsvector` budget, and now the encoding). See ADR-016 and
+`tests/unstorable_character_test.rs`, whose first test asks PostgreSQL for the
+premise instead of asserting it in prose.
+
+**Open, and deliberately not decided here**: `X-Correlation-Id` is adopted
+verbatim at any length and travels into every event as `ce-correlationid`.
+Measured on the running binary the same day — an id of 60 000 characters is
+accepted, echoed and published as a 60 000-byte attribute (actix refuses the
+request head above ~128 KiB, `431`). Google documents a Pub/Sub limit of
+**1 024 bytes per attribute value**, which would make every event of such a
+request `INVALID_ARGUMENT` — i.e. *silently* dropped, this service's documented
+failure mode. That premise could not be measured from this host: the publishing
+account has no `pubsub.publisher` on staging, the API validates the topic before
+the message, and no emulator is installed. It is reported rather than fixed,
+because bounding an id the contract says is "adopted when supplied" on an
+unverified premise is how a neighbouring decision gets overturned in passing.
 
 ## Two ceilings, and why they are not one number
 `MAX_DOCUMENT_SIZE_MB` bounds the **document body as stored** — 2 MB by
@@ -316,6 +394,106 @@ service safe at any concurrency. Options C (`--concurrency` on Cloud Run) and D
 were not chosen — and C lives outside this repository. Documents already stored
 above 2 MB are untouched: the bound is checked on bodies a caller *sends*, so an
 existing 9 MB document stays readable, renamable and snapshottable.
+
+## An update writes the columns it was given
+
+**`PATCH` sends PostgreSQL only the columns the caller named; everything else
+is `COALESCE($n, column)`, and that is load-bearing rather than tidy.** A column
+bound to a parameter is a column PostgreSQL stores afresh, so binding the old
+body back re-TOASTs it: new chunks, new write-ahead log, and the previous chunks
+dead until autovacuum. Until 2026-09-15 `update_document` read the whole row
+under its lock — body included — and wrote every column back, so **renaming a
+document rewrote the document**. Measured on the running binary, on a body of
+8 000 000 incompressible bytes: `PATCH {"title": …}` wrote **9 087 272 bytes of
+WAL in 506 ms**, and the same rename written as a partial `UPDATE` wrote
+**299 120 in 120 ms** — thirty times less. A status change and a metadata change
+cost the same 9 MB. What remains at 299 kB is the index work every update here
+owes and cannot avoid (`updated_at` is indexed, so nothing on this table is ever
+a HOT update, and the GIN expression index of ADR-006 is re-evaluated); it is
+identical before and after.
+
+The same statement stopped *reading* the body too. `UPDATE_LOCK_COLUMNS` is
+`status` — the transition to judge and the existence of a live row to answer
+404, nothing else — where the locking `SELECT … FOR UPDATE` used to ask for
+`DOC_COLUMNS`. Under contention that read was the visible cost: 20 concurrent
+renames produced 19 sqlx *slow statement* warnings, the locking read taking up
+to **10.0 s** because each waiter detoasted and shipped 8 MB before deciding
+anything. **The lock itself has not moved** — same row, same order as
+`version_repo::create_version`, ADR-004 untouched; only its projection changed.
+`current_version` is now advanced by PostgreSQL inside that statement and
+`insert_version` takes the number from the `RETURNING`, so there is no longer a
+second spelling of "the next version" anywhere.
+
+The hypothesis measurement refused: this was **not** an instance killer. Forty
+concurrent renames of that 8 MB document in a 512 MiB cgroup answered `200`
+forty times before (peak 384 MiB) and after (238 MiB) — the repair buys headroom
+and log volume, not a rescue. Said out loud because a benefit overstated is how
+the next reader inherits a false premise. See ADR-014 and
+`tests/update_cost_test.rs`, which asks PostgreSQL 17's
+`pg_column_toast_chunk_id` whether the body moved rather than trusting this
+paragraph — a per-row fact, immune to what the rest of the suite writes in
+parallel, unlike a WAL delta.
+
+## Taking a snapshot: the cost of a request is the request's, not the document's
+**`POST /documents/{id}/versions` copies the body INSIDE PostgreSQL; it does not
+pull it through this process.** The request is a document id and, at most, a
+500-character comment — but until 2026-09-15 `create_version` locked the row
+with `SELECT current_version, yjs_state, content … FOR UPDATE`, read the body
+into a Rust `String`, and bound that same string straight back as a parameter of
+the `INSERT` one statement later. The body crossed the connection **twice** and
+sat in memory in between.
+
+Nothing in the request bounds that, and **`MAX_DOCUMENT_SIZE_MB` does not
+either**: it is checked on bodies a caller *sends*, and ADR-009 deliberately
+leaves documents stored above it readable, renamable and snapshottable. That a
+10 MB body is reachable is **measured on the deployment**: neither live revision
+sets `MAX_DOCUMENT_SIZE_MB`, so `doceditor-00003-vkq` — the May 2026 binary
+carrying 100 % of traffic — falls back to the old default of **10 MB**, while
+the revision carrying the 2 MB default carries 0 %. (Do not argue this from the
+dev instance's contents, as the first draft did: the documents there above 2 MB
+are titled *ceiling probe* and dated 2026-09-14 — lot 14's own fixtures.)
+
+Measured on the running binary in a cgroup at the deployment's 512 MiB, N
+concurrent snapshots of one document (80 is Cloud Run's own default
+concurrency, which `ops/cloudrun/doceditor.json` does not override):
+
+```text
+  body    N      before                                    after
+  10 MB  20   oom-kill, 3-4 answers lost, /health gone   200 x20,  75 MiB
+  10 MB  80   oom-kill, 52 answers lost,  /health gone   200 x80,  75 MiB
+   8 MB  20   200 x20, 473 MiB, 9 684 ms                 200 x20,  65 MiB, 2 942 ms
+   2 MB  80   200 x80, 126 MiB                           200 x80,  20 MiB
+```
+
+Fifty-two of eighty callers got no answer and the **instance** was gone, not the
+request — so every other tenant's in-flight work died with it, from two ordinary
+calls. Fourth batch running in which a cost was attached to a quantity other
+than the one its name promises, and the second in which that quantity is the
+*stored document* rather than the request.
+
+`version_repo::NewVersion` now carries a `VersionBody`, and the two cases are
+named apart because they cost differently: `Supplied` for creation and content
+mutation (the caller sent the body, it is already here) and
+`OfDocumentAsItStands` for the snapshot, which becomes an
+`INSERT … SELECT … FROM editor.documents`. `snapshot_size_bytes` moves into SQL
+with it — `octet_length` counts the bytes `str::len()` counted. The locking read
+drops to `SNAPSHOT_LOCK_COLUMNS`, for the same reason `UPDATE_LOCK_COLUMNS`
+exists. **The lock has not moved**: same row, same `FOR UPDATE`, same order as
+`update_document`; ADR-004 is untouched.
+
+**What it does not buy, measured too**: the reads that *return* a body are
+unchanged and still close to the cap — `GET /documents/{id}` on a 10 MB document
+twenty at once peaked at **449–512 MiB** before and after. It survives, with no
+headroom, and `GET …/versions/{n}` has the same shape; that cost is the response
+and the contract requires it. Nothing here bounds concurrency either — ADR-009's
+options C and D remain open.
+
+`tests/snapshot_cost_test.rs` asks **the wire**: the pool is pointed at a
+counting TCP proxy inside the test, so the question is "how many bytes did
+PostgreSQL send this process to take a snapshot?" — a narrow-scoped fact the
+thirty other test binaries cannot move, unlike peak RSS. The non-vacuity
+assertion is written and checked first: the same meter must *see* a body when a
+read genuinely carries one. See ADR-015.
 
 ## Content and versions
 A document carries a `content` body (HTML/Markdown/JSON — the product brings its

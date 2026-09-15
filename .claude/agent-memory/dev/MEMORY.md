@@ -13,5 +13,9 @@
 - [Batch 2026-09-14 lot 14](project_doceditor_batch_20260914_lot14.md) — two human decisions taken, dispatched and never executed; a ceiling sized against the platform's own default concurrency
 - [Batch 2026-09-14 lot 15](project_doceditor_batch_20260914_lot15.md) — the query string was the last unparsed input: seven answers outside the contract, and a suite that made the fix smaller
 - [Batch 2026-09-14 lot 16](project_doceditor_batch_20260914_lot16.md) — the second decision in two batches taken but never routed; the deployment had chosen a transport in May and the code never learned
+- [Batch 2026-09-14 lot 17](project_doceditor_batch_20260914_lot17.md) — a report finally actionable and mis-attributed; the guard that named one crate, the page-walk that lost a document, and my own fixture faking the measurement
+- [Batch 2026-09-15 lot 18](project_doceditor_batch_20260915_lot18.md) — renaming a document rewrote the document; the per-row instrument that made it testable, and a deploy verdict taken on a tag URL
+- [Batch 2026-09-15 lot 19](project_doceditor_batch_20260915_lot19.md) — a 24-byte request whose cost was the stored document, the counting TCP proxy that made it testable, and a premise withdrawn because my own fixtures were the evidence
+- [Batch 2026-09-15 lot 20](project_doceditor_batch_20260915_lot20.md) — five ordinary inputs answered 500 because the database wrote the refusal, and the half-measured finding I reported instead of coding
 - ["Operational, not code"](feedback_operational_not_code.md) — a premise to measure, not a category to file under: what the process itself can do about the condition
-- [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — eleven cycles running: what to do with the turn, the eleven places the defects have actually been, and measuring a hypothesis before coding it
+- [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — twelve cycles, then one that was actionable and wrong about the cause: the thirteen places the defects have been, and measuring before coding

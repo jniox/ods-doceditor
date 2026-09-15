@@ -9,7 +9,7 @@ use crate::domain::document::{
 };
 use crate::domain::metadata::Metadata;
 use crate::domain::pagination::Pagination;
-use crate::domain::text::{Comment, Title};
+use crate::domain::text::{nul_at, nul_refusal, Comment, Title};
 use crate::error::{AppError, AppResult};
 use crate::events::producer::{CloudEvent, EventProducer};
 use crate::repository::{document_repo, template_repo, version_repo};
@@ -308,15 +308,28 @@ impl DocumentService {
         }
     }
 
-    /// Enforce the configured body ceiling, in bytes and not characters —
-    /// the storage cost is bytes, and a body of accented text would otherwise
-    /// pass a character check and fail at the payload limit.
+    /// Enforce what a body must satisfy to be *stored*: the configured ceiling,
+    /// and the one character the column cannot hold.
+    ///
+    /// The ceiling is in bytes and not characters — the storage cost is bytes,
+    /// and a body of accented text would otherwise pass a character check and
+    /// fail at the payload limit.
+    ///
+    /// `U+0000` is refused here rather than by PostgreSQL, which used to answer
+    /// it with `22021` and therefore `500 internal_error` on a body a caller
+    /// could perfectly well send. This is the only field the service does not
+    /// parse into a domain value — the contract stores it verbatim — so the
+    /// rule is applied where the body is checked. See
+    /// [`crate::domain::text::nul_at`] and `tests/unstorable_character_test.rs`.
     fn validate_content(&self, content: &str) -> AppResult<()> {
         if content.len() > self.max_content_bytes {
             return Err(AppError::Validation(format!(
                 "Content exceeds the maximum document size of {} bytes",
                 self.max_content_bytes
             )));
+        }
+        if let Some(at) = nul_at(content) {
+            return Err(AppError::Validation(nul_refusal("Content", at)));
         }
         Ok(())
     }

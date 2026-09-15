@@ -1,6 +1,6 @@
 ---
 name: go-read-the-path-yourself
-description: When a BA report has little or nothing code-actionable — twelve turns running on doceditor — what to do with the turn, the twelve places the real defects have actually been, and the duty to measure a hypothesis (and a decision's premise) before coding it
+description: When a BA report has little or nothing code-actionable — twelve turns running on doceditor, then one that finally did and got the cause wrong — what to do with the turn, the thirteen places the real defects have actually been, and the duty to measure a hypothesis (and a report's own attribution) before coding it
 metadata:
   type: feedback
 ---
@@ -172,7 +172,104 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   `cargo tree -e normal` was read again after the change (675 crates, h2 in
   none) instead of assumed.
 
-**How to apply.** These twelve are a checklist, not anecdotes: concurrency on the
+- **lot 17 — the streak ended, and the finding was mis-attributed.** The
+  thirteenth report carried something real: RUSTSEC-2026-0285 against `rustls`,
+  a crate this service compiles. It also carried a cause — "introduced by this
+  lot's new reqwest+rustls-tls chain" — and that was **false**, provable in one
+  command: `git show bce825b^:Cargo.lock` holds `rustls 0.23.40`, from before
+  that batch, reached through `sqlx`'s `tls-rustls` since the service was
+  written. The dependency is old; only the **advisory** is new. The inversion
+  decides the repair: had a dependency decision caused it, a dependency
+  decision would prevent the next one — as it stands, only a standing
+  measurement does, and the repository had none (the one dependency guard names
+  `h2` 0.3 by name). **So: an actionable report does not end your measuring, it
+  starts it.** Take the fix *and* ask what would have caught it. The
+  path-reading half of the same turn found the better defect anyway: a page walk
+  over ties returned 2 000 rows holding 1 999 documents, because
+  `ORDER BY updated_at DESC` is not total and the planner changes plan between
+  `OFFSET 0` and `OFFSET 1900`.
+
+- **lot 18 — a cost attached to the columns nobody asked to change, and an
+  instrument that decided whether the guard could exist at all.** `PATCH
+  {"title": …}` rewrote the whole body: the statement wrote *every* column back,
+  `content = $4` bound to the body it had read one statement earlier, and **a
+  column bound to a parameter is a column PostgreSQL stores afresh** — 9 095 640
+  bytes of write-ahead log, and as many of dead TOAST, for twenty-six useful
+  ones. Fifth instance of lot 9's question, asked of a write rather than a limit:
+  *what quantity does this operation actually pay for, and is it the one its name
+  promises?* Two halves worth keeping. First, **the instrument came before the
+  test**: the obvious measurement (a `pg_current_wal_lsn()` delta) is
+  cluster-wide, and this suite runs 31 binaries in parallel against a shared
+  instance — it would have been flaky by construction. PostgreSQL 17's
+  `pg_column_toast_chunk_id` is a *per-row* fact and is blind to the neighbours.
+  When a property looks untestable, the question is usually "is there a
+  narrower-scoped instrument?" rather than "can I bound the noise?". Second,
+  **measure the mechanism, not just the defect**: the whole repair rested on
+  "does `COALESCE($n, column)` with a NULL parameter preserve the TOAST
+  pointer?", a claim about PostgreSQL's executor. One `psql` probe on a real
+  8 MB row answered it before any Rust was written. And the hypothesis
+  measurement refused, published with the rest: at 512 MiB and concurrency 80
+  this was **not** an instance killer — 40 concurrent renames answered `200`
+  forty times before the fix as well as after.
+
+- **lot 19 — a request of twenty-four bytes whose cost was the stored
+  document, and a premise I had to withdraw because my own fixtures were the
+  evidence.** `POST /documents/{id}/versions` carries a document id and at most a
+  500-character comment; `create_version` selected `content` out of PostgreSQL
+  into a `String` and bound that same string straight back into the `INSERT` one
+  statement later. Nothing in the request bounds that, and — the sharp part —
+  **`MAX_DOCUMENT_SIZE_MB` does not either**, because it is checked on what a
+  caller *sends* while ADR-009 deliberately keeps already-stored larger bodies
+  snapshottable. At the deployment's own 512 MiB and Cloud Run's own default
+  concurrency of 80, **fifty-two of eighty callers got no answer and the instance
+  was gone**. Lot 12's question asked of a *write*: not "what does this endpoint
+  return" but "what did it have to move to answer", and the answer was a quantity
+  no caller can influence. Three halves worth keeping. First, **the instrument
+  again decided whether the guard could exist**: peak RSS is cluster-wide noise
+  with 31 binaries on one instance, so the guard points the pool at a **counting
+  TCP proxy** and asks how many bytes crossed *this pool's own socket* — narrow
+  scope, immune to neighbours, exactly lot 18's move one layer over. Second, and
+  this is the new one: **check your own fixture before you report the world, not
+  just before you report the service.** My draft argued that large documents are
+  reachable because "six exist on the dev instance"; after cleaning up this
+  turn's fixtures, two were left, both titled `ceiling probe` and dated
+  2026-09-14 — *lot 14's* fixtures. A shared dev database full of agents'
+  leftovers looks exactly like one full of traffic. The argument that held was a
+  **deployment** fact (`gcloud run revisions describe`: neither live revision sets
+  the variable, so the one serving 100 % of traffic runs at the old 10 MB
+  default). Third, **the taken-but-unrouted check came back negative** —
+  HR-20260915-003 really is `PENDING`, with no `resolution` and no `enactError`.
+  Run it every time; do not assume either answer. (Lot 20 ran it again and the
+  deciding field was `options[0].enactor`: `resolver`, not `dev` — so the same
+  check that once handed me the work correctly handed it away.)
+
+- **lot 20 — the refusal was written by the database, so the caller was told the
+  wrong thing.** `U+0000` is legal JSON (`"\u0000"`), a legal query value (`%00`),
+  and the one character PostgreSQL will not store (`22021` in `text`, `22P05` in
+  `jsonb`). No boundary looked for it, so five fields carried it down and the
+  **database** wrote the answer: `title`, `content`, a `metadata` value, a **nested
+  metadata key**, a snapshot `comment` and `?search=%00` each answered `500
+  internal_error` with an ERROR log line. Lot 15's question ("who answers when
+  something refuses, and in what shape?") asked one layer lower — not of a
+  framework extractor but of the **column**, which is the third time that layer has
+  been the one refusing (lot 10's `VARCHAR(500)`, lot 11's `tsvector` budget). Three
+  halves worth keeping. First, **a 500 is not merely an ugly status**: it says *our
+  fault, try again* about a request that can never succeed, it names no field, and
+  it pages somebody for an input a caller picks at will — that is the argument that
+  makes this worth a lot, not the status code. Second, **the width of a new refusal
+  needs its own test**: `U+0001` is just as unprintable and perfectly storable, so a
+  test that it still round-trips is what stops the next reader turning a
+  one-character bound into a sanitiser and killing ADR-001 quietly. Third, **say out
+  loud what you could not measure**: the same turn found `X-Correlation-Id` adopted
+  at any length into every event attribute (60 000 bytes, measured) against a
+  documented Pub/Sub limit of 1 024 — and the *refusal* half could not be measured
+  from this host (the API resolves the topic before validating the message; no
+  publisher role; no emulator). It was reported rather than coded, with the three
+  failed attempts written down, because bounding an id the contract calls "adopted
+  when supplied" on an unverified premise is exactly the passing overturn lot 15
+  learned to avoid.
+
+**How to apply.** These sixteen are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound
@@ -181,8 +278,9 @@ count in, and a **constraint that lives outside the application code entirely**
 — an index expression, a column type, a trigger — refusing what the code
 happily accepts, a rule whose check is silent about every shape of input it
 was not written for, **an input the boundary never parsed at all, whose
-refusals are therefore written by the framework**, and **a decision the report
-calls pending that the JSON says was taken and never routed**. Also
+refusals are therefore written by the framework — or, one layer lower, by the
+column**, and **a decision the report calls pending that the JSON says was taken
+and never routed**. Also
 compare the code against the repo's **published contract** (`docs/openapi.yaml`
 here) — when the two disagree, work out which is the defect before editing
 either; on lot 8 the contract was right four times out of four.
@@ -220,3 +318,12 @@ but not the body is a product question with no spec — reported in `CLAUDE.md`,
 still not fixed, across three lots. See [[doceditor-batch-20260914-lot10]],
 [[doceditor-batch-20260914-lot9]], [[doceditor-batch-20260914-lot8]] and
 [[doceditor-batch-20260913]].
+
+**And check that your own guard can express the defect, before you trust it.**
+Lot 17's first draft of the ordering test compared the two query plans over the
+*whole* list and they agreed: the instability is produced by the bounded sort,
+i.e. by the **page**, so the guard was green against the very defect it was
+written for. What caught it was writing the non-vacuity assertion first and
+watching it fail. Related, same turn: **do not build a test that waits for the
+planner to change its mind** — the switch point is a cost estimate, so it goes
+green vacuously on a smaller database. Pin the two plans instead.

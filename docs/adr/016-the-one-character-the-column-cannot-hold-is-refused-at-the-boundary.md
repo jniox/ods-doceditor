@@ -1,0 +1,131 @@
+# ADR-016 — The one character the column cannot hold is refused at the boundary
+
+- **Status**: accepted
+- **Date**: 2026-09-15
+- **Context**: `U+0000` in `title`, `content`, `metadata`, `comment` and
+  `?search=`, and five `500 internal_error` written by PostgreSQL
+
+## The measurement
+
+`U+0000` is an ordinary character in JSON (`"\u0000"` is valid, and
+`serde_json` parses it happily) and in a query string (`%00`). It is the one
+character PostgreSQL will not store: `text` answers
+`22021 invalid byte sequence for encoding "UTF8": 0x00`, and `jsonb` answers
+`22P05 unsupported Unicode escape sequence`. Nothing in this service looked for
+it, so five fields carried it to the database and the **database** wrote the
+reply.
+
+Measured on the running binary (2026-09-15, port 18087, HS256 token,
+`EVENT_BUS=pubsub` against a local stand-in), before:
+
+```text
+POST  {"title":"a\u0000b"}                        -> 500 {"error":"internal_error"}
+POST  {"title":"…","content":"hello\u0000world"}  -> 500 {"error":"internal_error"}
+POST  {"title":"…","metadata":{"k":"a\u0000b"}}   -> 500 {"error":"internal_error"}
+POST  …/versions {"comment":"relu\u0000par moi"}  -> 500 {"error":"internal_error"}
+GET   /api/v1/documents?search=%00                -> 500 {"error":"internal_error"}
+GET   /api/v1/documents?status=draft              -> 200   (the control)
+
+service log, one ERROR line per request:
+  "Database error: … invalid byte sequence for encoding \"UTF8\""
+  "Database error: … unsupported Unicode escape sequence"
+```
+
+`500 internal_error` is the wrong answer three times over:
+
+- it says *our fault, try again* about a request that can never succeed, so a
+  client with a retry policy retries for ever;
+- it names no field, so there is nothing in the reply to act on — the caller
+  cannot even tell which of the four fields it sent is the problem;
+- it raises an ERROR log line, i.e. a page on a service whose 500s are meant to
+  be rare, for an input a caller chose. A caller can produce them at will.
+
+This is the third time this repository has found the same shape, and all three
+cost a `500` on a request the contract permits: a constraint that
+lives in the **column** rather than in the code (`VARCHAR(500)` in lot 10, the
+`tsvector` budget of ADR-006 in lot 11, `jsonb`/`text` encoding here), refusing
+what the boundary accepted. The contract already had the right answers and the
+service was not giving them: `422` is "the request was well-formed but a value
+is unacceptable", and a query parameter this service will not accept is a `400`
+(`?status=published%20`, `?page=abc` — ADR-010).
+
+## Decision
+
+The rule is named once — `domain::text::nul_at`, with `nul_refusal` for the
+wording — and every string a caller can put into the database crosses it:
+
+| where | built by | answer |
+|---|---|---|
+| `title` | `domain::text::Title::parse` | `422` |
+| `comment` | `domain::text::Comment::parse` | `422` |
+| `metadata`, at every depth, **keys included** | `domain::metadata::Metadata::parse` | `422` |
+| `content` | `DocumentService::validate_content` | `422` |
+| `?search=` | `domain::query::search_term` | `400` |
+
+One function rather than five `if s.contains('\0')`, for the reason
+`version_repo::ensure_live_document` is one function: a rule copied to the
+places somebody thought about is a rule missing from the place nobody did. The
+place nobody did, here, is a **nested metadata key** — the pattern
+`^[a-z][a-z0-9_]{0,63}$` is stated by the contract about the object's own keys,
+so `{"kind": {"nested\u0000key": 1}}` crossed every existing check.
+
+Two things this deliberately is **not**:
+
+- **not a sanitiser.** The refusal is exactly one character wide. `U+0001`, its
+  neighbour, is just as unprintable and PostgreSQL stores it without complaint,
+  so it is still accepted and still returned byte-for-byte. ADR-001's promise
+  that a body is "neither parsed, sanitised nor escaped" stands; this is a
+  bound, like the byte ceiling beside it, and a bound names what it refuses.
+- **not a new product limit.** `U+0000` was never storable. The change moves
+  who says so from PostgreSQL to the boundary, and therefore what the caller is
+  told.
+
+After, on the same binary:
+
+```text
+POST  {"title":"a\u0000b"}      -> 422 "Title must not contain the NUL character U+0000 (at character 1)"
+POST  content                   -> 422 "Content must not contain … (at character 5)"
+POST  metadata value            -> 422 "Metadata value for key 'k' must not contain … (at character 1)"
+POST  metadata NESTED KEY       -> 422 "Metadata value for key 'kind' must not contain … (at character 6)"
+POST  …/versions comment        -> 422 "Comment must not contain … (at character 4)"
+GET   ?search=%00               -> 400 "Query parameter 'search' must not contain … (at character 0)"
+controls: ordinary create 201, ordinary comment 201, U+0001 everywhere 201 and stored verbatim
+ERROR log lines: 4 before, 0 after
+```
+
+The position is a **character** index, the unit every other bound in this
+service counts in (`maxLength`, `VARCHAR(n)`, the metadata value bound), so the
+message means the same thing in every alphabet.
+
+## What it costs
+
+`str::find` is a `memchr` byte scan with no allocation; the character index
+costs a second walk and is only paid on the way to a refusal. Measured on the
+release profile the Dockerfile produces — the only build where the number means
+anything:
+
+```text
+ 2 MiB body (the ceiling), no NUL   0.63 ms      NUL at the last byte  0.79 ms
+10 MiB body (a stored legacy one)   2.28 ms      NUL at the last byte  3.68 ms
+```
+
+Once per write, against a save that already costs tens of milliseconds of WAL
+and index work (ADR-014). The `metadata` walk is bounded by
+`MAX_METADATA_BYTES` (32 KiB, ADR-008), which `Metadata::parse` checks first.
+
+## How it is guarded
+
+`tests/unstorable_character_test.rs`, through the HTTP boundary, because the
+boundary is where every symptom showed. Two of its seven tests pass **before**
+the fix, on purpose:
+
+- **the premise**, asked of PostgreSQL rather than asserted in prose: binding
+  `U+0000` to `$1::text` must answer `22021` and to `$1::jsonb` must answer
+  `22P05`. If that ever stops being true, this ADR is over-zealous rather than
+  protective, and the test says so first;
+- **the width**, asked the same way: `U+0001` must still round-trip through
+  `text`, and through the API, byte-for-byte.
+
+The other five are the five fields, each asserting the status **and** that the
+message names the field — a refusal nobody can act on is most of what was wrong
+with the `500`.

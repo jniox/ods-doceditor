@@ -7,7 +7,7 @@ use crate::domain::pagination::Pagination;
 use crate::domain::text::Title;
 use crate::error::{AppError, AppResult};
 use crate::repository::tenant_context::begin_tenant_tx;
-use crate::repository::version_repo::{insert_version, NewVersion};
+use crate::repository::version_repo::{insert_version, NewVersion, VersionBody};
 
 /// How much of a document PostgreSQL is asked to index for full-text search.
 ///
@@ -50,8 +50,21 @@ pub fn search_predicate(param_placeholder: &str) -> String {
 }
 
 /// Full document projection, body included.
-const DOC_COLUMNS: &str = "id, tenant_id, title, status, created_by, created_at, updated_at, \
-                           deleted_at, current_version, word_count, metadata, content";
+pub const DOC_COLUMNS: &str = "id, tenant_id, title, status, created_by, created_at, updated_at, \
+                               deleted_at, current_version, word_count, metadata, content";
+
+/// What an update reads under its lock — and deliberately not one column more.
+///
+/// [`update_document`] locks the row before it decides anything, and until
+/// 2026-09-15 it locked it with [`DOC_COLUMNS`]: every PATCH therefore pulled
+/// the whole body out of PostgreSQL, *including* a PATCH whose only purpose was
+/// to replace it. The lock needs the current `status`, to judge the transition,
+/// and the existence of a live row, to answer 404. Nothing else.
+///
+/// Named as a constant for the same reason `version_repo` names its two
+/// projections apart: a projection that is written inline is a projection that
+/// grows a body column back the next time someone needs one more field.
+pub const UPDATE_LOCK_COLUMNS: &str = "status";
 
 /// List projection: everything except the body (see `DocumentSummary`).
 const SUMMARY_COLUMNS: &str = "id, tenant_id, title, status, created_by, created_at, updated_at, \
@@ -104,8 +117,12 @@ pub async fn create_document(
         doc.id,
         NewVersion {
             version: doc.current_version,
-            content,
-            yjs_snapshot: &[],
+            // The caller sent this body; it is already in this process, so
+            // binding it costs nothing the request has not already paid.
+            body: VersionBody::Supplied {
+                content,
+                yjs_snapshot: &[],
+            },
             created_by,
             comment: Some("initial version"),
             is_auto: true,
@@ -214,7 +231,23 @@ fn build_list_query(
     }
 
     if add_order {
-        sql.push_str(" ORDER BY updated_at DESC");
+        // A total order, and `id` is not decoration. `updated_at` alone ties
+        // whenever two documents are written by one transaction — a seed, an
+        // import, a data migration — and PostgreSQL is then free to return
+        // tied rows in whatever order the plan it picked produces. It does not
+        // pick the same plan for every page: measured on 2026-09-14 over 2 000
+        // tied documents, `OFFSET 0` ran an `Index Scan using
+        // idx_documents_tenant_updated` and `OFFSET 1900` a `Sort`, and the
+        // two orders differ by a rotation. Walking the twenty pages of that
+        // list returned 2 000 rows holding **1 999** documents: one returned
+        // twice, one never returned at all.
+        //
+        // A client that walks the pages to build its own list silently loses a
+        // document, and the response says nothing — the same class as the page
+        // this endpoint used to report having served. `id` is the primary key,
+        // so appending it makes the order total and the walk a partition,
+        // whatever plan each page gets. See tests/list_stability_test.rs.
+        sql.push_str(" ORDER BY updated_at DESC, id DESC");
     }
 
     (sql, args)
@@ -268,17 +301,23 @@ pub async fn update_document(
     } = update;
     let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // First fetch the current document to validate transitions.
+    // Lock the row, and read of it only what the decision needs: the current
+    // status, to judge the transition, and the existence of a live row, to
+    // answer 404. See [`UPDATE_LOCK_COLUMNS`] — this read used to ask for
+    // `DOC_COLUMNS`, so every PATCH pulled the whole body out of PostgreSQL,
+    // including a PATCH whose only purpose was to replace it.
     //
-    // `FOR UPDATE` is what makes the next version number safe to compute in
-    // Rust: the read and the write below are one read-modify-write on
-    // `current_version`, and without the lock two concurrent editors read the
-    // same number, both claim it, and the `UNIQUE (document_id, version)` of
-    // migration 003 turns the loser into a 500 on a legitimate save. Two
-    // editors on one document is this service's normal traffic, not an edge
-    // case. See tests/concurrency_test.rs.
-    let current: Option<Document> = sqlx::query_as(&format!(
-        r#"SELECT {DOC_COLUMNS}
+    // `FOR UPDATE` is what makes the version number safe to advance: the lock
+    // and the write below are one read-modify-write on `current_version`, and
+    // without the lock two concurrent editors claim the same number and the
+    // `UNIQUE (document_id, version)` of migration 003 turns the loser into a
+    // 500 on a legitimate save — while a save racing an explicit snapshot
+    // deadlocks, the two paths writing the same two tables in opposite orders.
+    // Two editors on one document is this service's normal traffic, not an edge
+    // case. It stays here, taken on the same row and in the same order as
+    // `version_repo::create_version`. See ADR-004 and tests/concurrency_test.rs.
+    let current: Option<(String,)> = sqlx::query_as(&format!(
+        r#"SELECT {UPDATE_LOCK_COLUMNS}
          FROM editor.documents
          WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
          FOR UPDATE"#
@@ -288,60 +327,78 @@ pub async fn update_document(
     .fetch_optional(&mut *tx)
     .await?;
 
-    let current = current.ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
+    let (current_status,) =
+        current.ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
 
     // Validate status transition if status is being changed
     if let Some(new_status) = status {
         use crate::domain::document::DocumentStatus;
-        let current_status = DocumentStatus::parse(&current.status)
+        let from = DocumentStatus::parse(&current_status)
             .ok_or_else(|| AppError::Internal("Invalid current status".to_string()))?;
         let target_status = DocumentStatus::parse(new_status)
             .ok_or_else(|| AppError::BadRequest(format!("Invalid status: {new_status}")))?;
 
-        if !current_status.can_transition_to(&target_status) {
+        if !from.can_transition_to(&target_status) {
             return Err(AppError::BadRequest(format!(
-                "Cannot transition from '{}' to '{}'",
-                current.status, new_status
+                "Cannot transition from '{current_status}' to '{new_status}'"
             )));
         }
     }
 
-    let final_title = title.as_ref().map_or(current.title.as_str(), Title::as_str);
-    let final_status = status.unwrap_or(&current.status);
-    let final_metadata = metadata.map_or_else(|| current.metadata.clone(), Metadata::into_value);
-    let final_content = content.unwrap_or(&current.content);
-    let final_version = match content {
-        Some(_) => current.current_version + 1,
-        None => current.current_version,
-    };
-
+    // One statement, and every column the caller did not name keeps the value
+    // it already has — `COALESCE($n, column)` rather than a value read a
+    // statement earlier and written straight back.
+    //
+    // The difference is not style. A column bound to a parameter is a column
+    // PostgreSQL must store afresh, so binding the old body back re-TOASTed it:
+    // new chunks, new write-ahead log, and the previous chunks dead until
+    // autovacuum — measured at 9 087 272 bytes of WAL to change a title on an
+    // 8 MB document, against 299 120 for the same rename written this way.
+    // Passing the column through leaves the TOAST pointer untouched, which is
+    // what makes a rename cost the size of a title again.
+    //
+    // `word_count` and `current_version` move with the body and only with it,
+    // which is why they are `CASE`s on the same parameter rather than values
+    // computed in Rust from a row read under the lock.
     let doc: Document = sqlx::query_as(&format!(
         r#"UPDATE editor.documents
-         SET title = $1, status = $2, metadata = $3, content = $4, word_count = $5,
-             current_version = $6, updated_at = now()
-         WHERE id = $7 AND tenant_id = $8 AND deleted_at IS NULL
+         SET title = COALESCE($1, title),
+             status = COALESCE($2, status),
+             metadata = COALESCE($3, metadata),
+             content = COALESCE($4, content),
+             word_count = CASE WHEN $4 IS NULL THEN word_count ELSE $5 END,
+             current_version = CASE WHEN $4 IS NULL
+                                    THEN current_version
+                                    ELSE current_version + 1 END,
+             updated_at = now()
+         WHERE id = $6 AND tenant_id = $7 AND deleted_at IS NULL
          RETURNING {DOC_COLUMNS}"#
     ))
-    .bind(final_title)
-    .bind(final_status)
-    .bind(&final_metadata)
-    .bind(final_content)
-    .bind(word_count(final_content))
-    .bind(final_version)
+    .bind(title.as_ref().map(Title::as_str))
+    .bind(status)
+    .bind(metadata.map(Metadata::into_value))
+    .bind(content)
+    .bind(content.map(word_count))
     .bind(document_id)
     .bind(tenant_id)
     .fetch_one(&mut *tx)
     .await?;
 
-    if content.is_some() {
+    if let Some(content) = content {
         insert_version(
             &mut tx,
             tenant_id,
             document_id,
             NewVersion {
-                version: final_version,
-                content: final_content,
-                yjs_snapshot: &[],
+                // The number PostgreSQL just assigned under the lock, not one
+                // recomputed here: two spellings of "the next version" is how
+                // the document row and its history come to disagree.
+                version: doc.current_version,
+                // Supplied, like creation: this body arrived in the request.
+                body: VersionBody::Supplied {
+                    content,
+                    yjs_snapshot: &[],
+                },
                 created_by: updated_by,
                 comment: None,
                 is_auto: true,

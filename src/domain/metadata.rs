@@ -28,7 +28,7 @@
 
 use serde_json::Value;
 
-use crate::domain::text::MAX_METADATA_VALUE_CHARS;
+use crate::domain::text::{nul_at, nul_refusal, MAX_METADATA_VALUE_CHARS};
 use crate::error::{AppError, AppResult};
 
 /// BR-029: at most twenty keys.
@@ -106,6 +106,18 @@ impl Metadata {
                      {MAX_METADATA_VALUE_CHARS} characters (got {length})"
                 )));
             }
+            // The column is `jsonb`, which refuses `\u0000` anywhere inside it
+            // — in a string or in a key. Nested keys are the one place with no
+            // other rule at all: the pattern above is stated by the contract
+            // about *this object's* keys, so `{"kind": {"nested\u0000key": 1}}`
+            // crossed every check and was refused by PostgreSQL with
+            // `22P05`, i.e. by a `500`. See [`crate::domain::text::nul_at`].
+            if let Some(at) = nul_within(value) {
+                return Err(AppError::Validation(nul_refusal(
+                    &format!("Metadata value for key '{key}'"),
+                    at,
+                )));
+            }
         }
 
         Ok(Self(raw.clone()))
@@ -147,6 +159,40 @@ fn longest_string_over(value: &Value, limit: usize) -> Option<usize> {
             }
             Value::Array(items) => stack.extend(items.iter()),
             Value::Object(entries) => stack.extend(entries.values()),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Where the first `U+0000` sits inside `value` — in a string **or in a key**,
+/// at any depth — as a character index into the offending string.
+///
+/// Keys are walked as well as values because `jsonb` stores both and refuses
+/// the character in both, and because nothing else looks at a nested key: the
+/// pattern in [`Metadata::parse`] is stated by the contract about the object's
+/// own keys only.
+///
+/// Iterative, for the same reason as [`longest_string_over`]: stack safety
+/// should not depend on who built the value.
+fn nul_within(value: &Value) -> Option<usize> {
+    let mut stack = vec![value];
+    while let Some(node) = stack.pop() {
+        match node {
+            Value::String(s) => {
+                if let Some(at) = nul_at(s) {
+                    return Some(at);
+                }
+            }
+            Value::Array(items) => stack.extend(items.iter()),
+            Value::Object(entries) => {
+                for (key, value) in entries {
+                    if let Some(at) = nul_at(key) {
+                        return Some(at);
+                    }
+                    stack.push(value);
+                }
+            }
             _ => {}
         }
     }
@@ -212,6 +258,28 @@ mod tests {
                 MAX_METADATA_VALUE_CHARS + 1
             );
         }
+    }
+
+    /// `jsonb` refuses `U+0000` in a string **and in a key**, and a nested key
+    /// is the one place no other rule looks: the pattern in `parse` is stated
+    /// by the contract about this object's own keys.
+    #[test]
+    fn the_character_jsonb_cannot_hold_is_refused_in_keys_as_well_as_values() {
+        for shape in [
+            json!({ "kind": "a\u{0}b" }),
+            json!({ "kind": { "inner": "a\u{0}b" } }),
+            json!({ "tags": ["ok", "a\u{0}b"] }),
+            json!({ "kind": { "nested\u{0}key": "v" } }),
+        ] {
+            let err = match Metadata::parse(&shape) {
+                Err(e) => e.to_string(),
+                Ok(_) => panic!("accepted U+0000 in {shape}"),
+            };
+            assert!(err.contains("U+0000"), "{err}");
+        }
+
+        // One character wide: U+0001 is stored by jsonb and stays accepted.
+        assert!(Metadata::parse(&json!({ "kind": "a\u{1}b" })).is_ok());
     }
 
     #[test]
