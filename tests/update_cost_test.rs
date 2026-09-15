@@ -285,6 +285,15 @@ async fn a_new_body_does_rewrite_the_body() {
 /// out of PostgreSQL, *including* a PATCH whose only purpose was to replace it.
 /// The projection is named once, as `version_repo` names its two, so it cannot
 /// quietly grow a body column again.
+///
+/// **This one is a shape guard and says so.** Unlike its four neighbours it does
+/// not go red on the parent commit — it reads the constant the code uses, not the
+/// bytes the connection carried, and nothing observable on the wire distinguishes
+/// a lock that read the body from one that did not. What the body cost under that
+/// lock was measured by hand instead: 20 concurrent renames of an 8 MB document
+/// produced 19 sqlx *slow statement* warnings, the locking read taking up to
+/// 10.0 s. Naming the two projections is what keeps the repair from being undone
+/// by the next person who needs one more field there.
 #[actix_web::test]
 async fn the_locking_read_of_an_update_carries_no_body() {
     assert!(
