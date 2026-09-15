@@ -41,7 +41,8 @@ guards offline everything the job cannot: that the workflow calls it, and the
 classification itself on fixtures — including two cases that exit **2**, because
 nothing measured is not a pass.
 
-**BR-0010 does not exist.** `~/dev/specs/ods-platform/context/business-rules.md`
+**BR-0010 does not exist — CORRECTED IN LOT 18: it does, in `~/dev/ops/standards/STANDARDS.md` §7.
+The measurement below looked in one file and concluded about the estate.** `~/dev/specs/ods-platform/context/business-rules.md`
 holds 0001, 0003, 0004, 0006, 0007, 0008, 0009, 0013 — nothing between 0009 and
 0013, and no `### BR-0010` anywhere under `~/dev/specs`. This repository has
 cited it since `735647d` and `CLAUDE.md` cites it too. Stated locally in ADR-012

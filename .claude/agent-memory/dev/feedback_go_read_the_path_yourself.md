@@ -189,7 +189,30 @@ code"*. Each turn found something real, and none of it was subtle once looked at
   `ORDER BY updated_at DESC` is not total and the planner changes plan between
   `OFFSET 0` and `OFFSET 1900`.
 
-**How to apply.** These thirteen are a checklist, not anecdotes: concurrency on the
+- **lot 18 — a cost attached to the columns nobody asked to change, and an
+  instrument that decided whether the guard could exist at all.** `PATCH
+  {"title": …}` rewrote the whole body: the statement wrote *every* column back,
+  `content = $4` bound to the body it had read one statement earlier, and **a
+  column bound to a parameter is a column PostgreSQL stores afresh** — 9 095 640
+  bytes of write-ahead log, and as many of dead TOAST, for twenty-six useful
+  ones. Fifth instance of lot 9's question, asked of a write rather than a limit:
+  *what quantity does this operation actually pay for, and is it the one its name
+  promises?* Two halves worth keeping. First, **the instrument came before the
+  test**: the obvious measurement (a `pg_current_wal_lsn()` delta) is
+  cluster-wide, and this suite runs 31 binaries in parallel against a shared
+  instance — it would have been flaky by construction. PostgreSQL 17's
+  `pg_column_toast_chunk_id` is a *per-row* fact and is blind to the neighbours.
+  When a property looks untestable, the question is usually "is there a
+  narrower-scoped instrument?" rather than "can I bound the noise?". Second,
+  **measure the mechanism, not just the defect**: the whole repair rested on
+  "does `COALESCE($n, column)` with a NULL parameter preserve the TOAST
+  pointer?", a claim about PostgreSQL's executor. One `psql` probe on a real
+  8 MB row answered it before any Rust was written. And the hypothesis
+  measurement refused, published with the rest: at 512 MiB and concurrency 80
+  this was **not** an instance killer — 40 concurrent renames answered `200`
+  forty times before the fix as well as after.
+
+**How to apply.** These fourteen are a checklist, not anecdotes: concurrency on the
 write path, a predicate across every call site of its rule, a premise nobody has
 re-measured, a value normalised in one layer and reported in another, a
 configured limit applied to a different quantity from the one it names, a bound

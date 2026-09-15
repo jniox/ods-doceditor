@@ -14,5 +14,6 @@
 - [Batch 2026-09-14 lot 15](project_doceditor_batch_20260914_lot15.md) — the query string was the last unparsed input: seven answers outside the contract, and a suite that made the fix smaller
 - [Batch 2026-09-14 lot 16](project_doceditor_batch_20260914_lot16.md) — the second decision in two batches taken but never routed; the deployment had chosen a transport in May and the code never learned
 - [Batch 2026-09-14 lot 17](project_doceditor_batch_20260914_lot17.md) — a report finally actionable and mis-attributed; the guard that named one crate, the page-walk that lost a document, and my own fixture faking the measurement
+- [Batch 2026-09-15 lot 18](project_doceditor_batch_20260915_lot18.md) — renaming a document rewrote the document; the per-row instrument that made it testable, and a deploy verdict taken on a tag URL
 - ["Operational, not code"](feedback_operational_not_code.md) — a premise to measure, not a category to file under: what the process itself can do about the condition
 - [Reports with nothing actionable](feedback_go_read_the_path_yourself.md) — twelve cycles, then one that was actionable and wrong about the cause: the thirteen places the defects have been, and measuring before coding

@@ -120,14 +120,24 @@ exactly one failure, in the test that names the property.
   a prebuilt-binary action. A check on the supply chain is the wrong place to
   add a new third party to trust.
 
-## Open, and named rather than silently inherited
+## The citation, checked in both places (corrected 2026-09-15)
 
 This repository has cited **BR-0010** — "judged on the delivered graph" — since
-`735647d`, and it is also cited in `CLAUDE.md`. It is **not** in
-`~/dev/specs/ods-platform/context/business-rules.md`, which on 2026-09-14
-contains BR-0001, 0003, 0004, 0006, 0007, 0008, 0009 and 0013 and nothing
-between 0009 and 0013. The rule this ADR writes down is therefore local to this
-service until someone injects it platform-wide; it is not invented here (the
-practice and the wording predate it), but it rests on a citation that resolves
-to nothing. Reported rather than fixed: injecting a business rule is a cockpit
-act, not a dev one (BR-0002).
+`735647d`, and `CLAUDE.md` cites it too. When this ADR was written that citation
+was reported as resolving to nothing, on the strength of one file:
+`~/dev/specs/ods-platform/context/business-rules.md` holds BR-0001, 0003, 0004,
+0006, 0007, 0008, 0009 and 0013, and nothing between 0009 and 0013.
+
+**That conclusion was wrong, and the way it was wrong is worth more than the
+correction.** The injected decisions of the estate live in *two* places: the
+project's `business-rules.md` **and** `~/dev/ops/standards/STANDARDS.md` §7,
+"Décisions transverses (injectées depuis le cockpit)". BR-0010 is in the second,
+worded almost exactly as this ADR restates it — an advisory is judged on
+`cargo tree -e normal`, an advisory touching only a development dependency or
+having no upstream fix is *declared and traced* rather than blocking, and
+"audit at zero" is never the right phrasing. It was acted on 2026-09-09 from
+HR-20260909-032, after three batches lost to the same confusion.
+
+So the rule this ADR implements is platform-wide, not local, and nothing needs
+injecting. **A citation that resolves in neither of two files is missing; one
+looked up in a single file is merely unfound.**

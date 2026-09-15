@@ -15,8 +15,11 @@ lockfile's tally does not.** `cargo audit` reads `Cargo.lock`, which is wider
 than the binary — it pins the optional dependencies of our dependencies — so
 its "1 vulnerability found" has, every time it has been examined here, named a
 crate nothing compiles (`rsa` through `sqlx-mysql`, `anyhow`, `spin`). The
-judgement is the intersection with `cargo tree -e normal`, it is a command
-rather than a habit (`scripts/audit-delivered-graph.sh`, CI job `Advisories`),
+judgement is the intersection with `cargo tree -e normal` — that is BR-0010, and
+it lives in `~/dev/ops/standards/STANDARDS.md` §7 rather than in the project's
+`business-rules.md`, which is why lot 17 reported it as a phantom citation. It is
+a command rather than a habit (`scripts/audit-delivered-graph.sh`, CI job
+`Advisories`),
 and `tests/advisories.rs` keeps that command wired and non-vacuous. It exists
 because on 2026-09-14 RUSTSEC-2026-0285 landed on `rustls` 0.23.40 — shipped
 here through `sqlx` since the service was written, and through `reqwest` since
